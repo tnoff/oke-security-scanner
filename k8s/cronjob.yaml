@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: security-scanner
+  namespace: default
+spec:
+  # Run daily at 2 AM UTC
+  schedule: "0 2 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid  # Don't run concurrent scans
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: security-scanner
+        spec:
+          serviceAccountName: security-scanner
+          restartPolicy: OnFailure
+          containers:
+          - name: scanner
+            image: iad.ocir.io/your-namespace/oke-security-scanner:latest
+            imagePullPolicy: Always
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "500m"
+              limits:
+                memory: "2Gi"
+                cpu: "2000m"
+            env:
+              # OCIR credentials from secret
+              - name: OCI_REGISTRY
+                valueFrom:
+                  secretKeyRef:
+                    name: security-scanner-secrets
+                    key: OCI_REGISTRY
+              - name: OCI_USERNAME
+                valueFrom:
+                  secretKeyRef:
+                    name: security-scanner-secrets
+                    key: OCI_USERNAME
+              - name: OCI_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: security-scanner-secrets
+                    key: OCI_TOKEN
+              - name: OCI_NAMESPACE
+                valueFrom:
+                  secretKeyRef:
+                    name: security-scanner-secrets
+                    key: OCI_NAMESPACE
+
+              # Trivy configuration
+              - name: TRIVY_SEVERITY
+                valueFrom:
+                  secretKeyRef:
+                    name: security-scanner-secrets
+                    key: TRIVY_SEVERITY
+              - name: TRIVY_TIMEOUT
+                valueFrom:
+                  secretKeyRef:
+                    name: security-scanner-secrets
+                    key: TRIVY_TIMEOUT
+
+              # Scanning configuration
+              - name: EXCLUDE_NAMESPACES
+                valueFrom:
+                  secretKeyRef:
+                    name: security-scanner-secrets
+                    key: EXCLUDE_NAMESPACES
+            volumeMounts:
+              - name: trivy-cache
+                mountPath: /home/scanner/.cache/trivy
+          volumes:
+            - name: trivy-cache
+              emptyDir: {}

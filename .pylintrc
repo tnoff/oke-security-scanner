@@ -1,0 +1,49 @@
+[MASTER]
+# Use multiple processes to speed up Pylint
+jobs=0
+
+# Pickle collected data for later comparisons
+persistent=yes
+
+# Discover python modules and packages in the file system subtree
+recursive=yes
+
+[MESSAGES CONTROL]
+# Disable specific warnings that are too strict for this project
+disable=
+    missing-module-docstring,
+    missing-function-docstring,
+    too-few-public-methods,
+    too-many-arguments,
+    too-many-locals,
+    too-many-instance-attributes,
+    line-too-long,
+    logging-fstring-interpolation,
+    broad-exception-caught,
+    import-error
+
+[FORMAT]
+# Maximum number of characters on a single line
+max-line-length=120
+
+# String used as indentation unit (4 spaces)
+indent-string='    '
+
+[BASIC]
+# Good variable names which should always be accepted
+good-names=i,j,k,ex,Run,_,e,f,db,ns,cfg
+
+[DESIGN]
+# Maximum number of arguments for function / method
+max-args=8
+
+# Maximum number of locals for function / method body
+max-locals=20
+
+[SIMILARITIES]
+# Minimum lines number of a similarity
+min-similarity-lines=10
+
+[IMPORTS]
+# Allow wildcard imports from specific modules
+allow-wildcard-with-all=no
