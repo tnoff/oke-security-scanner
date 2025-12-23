@@ -1,0 +1,8 @@
+# Kubernetes client
+kubernetes==29.0.0
+
+# OpenTelemetry for observability
+opentelemetry-api
+opentelemetry-sdk==1.25.0
+opentelemetry-exporter-otlp
+opentelemetry-instrumentation
