@@ -1,5 +1,5 @@
 # Kubernetes client
-kubernetes==29.0.0
+kubernetes==34.1.0
 
 # OpenTelemetry for observability
 opentelemetry-api
