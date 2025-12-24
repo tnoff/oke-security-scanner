@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 # Install system dependencies
 RUN apt-get update && \
@@ -9,17 +9,8 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Trivy from GitHub releases
-ARG TRIVY_VERSION=0.58.2
-RUN wget -qO trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" && \
-    tar -xzf trivy.tar.gz && \
-    mv trivy /usr/local/bin/ && \
-    rm trivy.tar.gz && \
-    chmod +x /usr/local/bin/trivy
-
-# Install kubectl
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
-    chmod +x kubectl && \
-    mv kubectl /usr/local/bin/
+ARG TRIVY_VERSION=v0.61.1
+RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh |  sh -s -- -b /usr/local/bin ${TRIVY_VERSION}
 
 # Pre-download Trivy vulnerability database
 RUN trivy image --download-db-only
