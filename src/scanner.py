@@ -1,5 +1,7 @@
 """Trivy scanner wrapper for vulnerability scanning."""
 
+import base64
+from pathlib import Path
 from logging import getLogger
 
 import json
@@ -37,29 +39,30 @@ class TrivyScanner:
         try:
             logger.info(f"Authenticating to OCIR registry: {self.cfg.oci_registry}")
 
-            # Login to OCIR using docker login
+            # Create Docker config directory
+            docker_config_dir = Path.home() / ".docker"
+            docker_config_dir.mkdir(exist_ok=True)
+
+            # Create auth token (base64 encode username:password)
+            auth_string = f"{self.cfg.oci_username}:{self.cfg.oci_token}"
+            auth_token = base64.b64encode(auth_string.encode()).decode()
+
+            # Create Docker config.json
             # Trivy respects Docker's credential store
-            subprocess.run(
-                [
-                    "docker",
-                    "login",
-                    self.cfg.oci_registry,
-                    "--username", self.cfg.oci_username,
-                    "--password-stdin",
-                ],
-                input=self.cfg.oci_token,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=True,
-            )
+            config_content = {
+                "auths": {
+                    self.cfg.oci_registry: {
+                        "auth": auth_token
+                    }
+                }
+            }
+
+            config_file = docker_config_dir / "config.json"
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config_content, f, indent=2)
 
             logger.info("Successfully authenticated to OCIR")
 
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Failed to authenticate to OCIR: {e.stderr}")
-        except subprocess.TimeoutExpired:
-            logger.warning("OCIR authentication timed out")
         except Exception as e:
             logger.warning(f"Unexpected error during OCIR authentication: {e}")
 
