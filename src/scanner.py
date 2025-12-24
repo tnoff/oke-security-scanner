@@ -25,6 +25,44 @@ class TrivyScanner:
         self.db_updated = False
         logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
 
+        # Authenticate to OCIR for private image access
+        self._configure_registry_auth()
+
+    def _configure_registry_auth(self) -> None:
+        """Configure Docker registry authentication for private images."""
+        if not self.cfg.oci_registry or not self.cfg.oci_username or not self.cfg.oci_token:
+            logger.warning("OCIR credentials not fully configured, private image scans may fail")
+            return
+
+        try:
+            logger.info(f"Authenticating to OCIR registry: {self.cfg.oci_registry}")
+
+            # Login to OCIR using docker login
+            # Trivy respects Docker's credential store
+            subprocess.run(
+                [
+                    "docker",
+                    "login",
+                    self.cfg.oci_registry,
+                    "--username", self.cfg.oci_username,
+                    "--password-stdin",
+                ],
+                input=self.cfg.oci_token,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            )
+
+            logger.info("Successfully authenticated to OCIR")
+
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Failed to authenticate to OCIR: {e.stderr}")
+        except subprocess.TimeoutExpired:
+            logger.warning("OCIR authentication timed out")
+        except Exception as e:
+            logger.warning(f"Unexpected error during OCIR authentication: {e}")
+
     def update_database(self) -> bool:
         """Update Trivy vulnerability database."""
         with tracer.start_as_current_span("update-trivy-db") as span:
@@ -41,10 +79,7 @@ class TrivyScanner:
                 )
 
                 duration = time.time() - start_time
-                logger.info(
-                    "Trivy database updated successfully",
-                    duration_seconds=round(duration, 2),
-                )
+                logger.info(f"Trivy database updated successfully (duration: {round(duration, 2)}s)")
 
                 span.set_attribute("trivy.db_update.success", True)
                 span.set_attribute("trivy.db_update.duration", duration)
@@ -59,10 +94,7 @@ class TrivyScanner:
                 return False
 
             except subprocess.CalledProcessError as e:
-                logger.warning(
-                    "Trivy database update failed, using cached database",
-                    error=e.stderr,
-                )
+                logger.warning(f"Trivy database update failed, using cached database: {e.stderr}")
                 span.set_attribute("trivy.db_update.success", False)
                 span.set_attribute("trivy.db_update.error", e.stderr)
                 return False
@@ -83,7 +115,7 @@ class TrivyScanner:
                         "image",
                         "--format", "json",
                         "--severity", self.cfg.trivy_severity,
-                        "--timeout", str(self.cfg.trivy_timeout),
+                        "--timeout", f"{self.cfg.trivy_timeout}s",
                         "--quiet",
                         image,
                     ],
