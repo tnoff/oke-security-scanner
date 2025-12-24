@@ -26,7 +26,7 @@ def main():
         trace_provider, meter_provider, logger_provider = setup_telemetry()
         logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
         metrics = create_metrics(meter_provider)
-        logger.info("OpenTelemetry initialized", endpoint=config.otlp_endpoint)
+        logger.info(f"OpenTelemetry initialized (endpoint: {config.otlp_endpoint})")
 
         # Start root trace span
         with trace_provider.start_as_current_span("security-scan") as root_span:
@@ -46,7 +46,7 @@ def main():
             with trace_provider.start_as_current_span("get-cluster-images") as span:
                 images = k8s_client.get_all_images()
                 span.set_attribute("images.total", len(images))
-                logger.info("Discovered images", count=len(images))
+                logger.info(f"Discovered {len(images)} images")
 
             # Scan each image
             scan_results = []
@@ -68,13 +68,9 @@ def main():
 
             # Log summary
             logger.info(
-                "Security scan completed",
-                duration_seconds=round(total_duration, 2),
-                images_scanned=len(scan_results),
-                images_failed=failed_scans,
-                total_images=len(images),
-                total_critical=total_critical,
-                total_high=total_high,
+                f"Security scan completed in {round(total_duration, 2)}s: "
+                f"{len(scan_results)} scanned, {failed_scans} failed, {len(images)} total, "
+                f"{total_critical} critical, {total_high} high"
             )
 
             # Set root span attributes
@@ -86,10 +82,7 @@ def main():
 
             # Exit with error if critical vulnerabilities found
             if total_critical > 0:
-                logger.error(
-                    "Critical vulnerabilities detected!",
-                    count=total_critical,
-                )
+                logger.error(f"Critical vulnerabilities detected! Count: {total_critical}")
                 root_span.set_attribute("scan.has_critical", True)
                 sys.exit(1)
 
@@ -97,10 +90,10 @@ def main():
             root_span.set_attribute("scan.has_critical", False)
 
     except ValueError as e:
-        logger.error("Configuration error", error=str(e))
+        logger.error(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:
-        logger.exception("Unexpected error during security scan", error=str(e))
+        logger.exception(f"Unexpected error during security scan: {e}")
         sys.exit(1)
 
 

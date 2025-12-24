@@ -74,7 +74,7 @@ class TrivyScanner:
             start_time = time.time()
 
             try:
-                logger.info("Scanning image", image=image)
+                logger.info(f"Scanning image: {image}")
 
                 # Run Trivy scan
                 result = subprocess.run(
@@ -101,11 +101,10 @@ class TrivyScanner:
 
                 # Log results
                 logger.info(
-                    "Image scan completed",
-                    image=image,
-                    duration_seconds=round(duration, 2),
-                    critical=vulnerabilities.get("CRITICAL", 0),
-                    high=vulnerabilities.get("HIGH", 0),
+                    f"Image scan completed: {image} "
+                    f"(duration: {round(duration, 2)}s, "
+                    f"critical: {vulnerabilities.get('CRITICAL', 0)}, "
+                    f"high: {vulnerabilities.get('HIGH', 0)})"
                 )
 
                 # Record metrics - set gauge with image and vulnerability counts
@@ -138,27 +137,19 @@ class TrivyScanner:
                 }
 
             except subprocess.TimeoutExpired:
-                logger.error("Image scan timed out", image=image)
+                logger.error(f"Image scan timed out: {image}")
                 span.set_attribute("scan.success", False)
                 span.set_attribute("scan.error", "timeout")
                 return None
 
             except subprocess.CalledProcessError as e:
-                logger.error(
-                    "Image scan failed",
-                    image=image,
-                    error=e.stderr,
-                )
+                logger.error(f"Image scan failed: {image} - {e.stderr}")
                 span.set_attribute("scan.success", False)
                 span.set_attribute("scan.error", e.stderr)
                 return None
 
             except json.JSONDecodeError as e:
-                logger.error(
-                    "Failed to parse Trivy output",
-                    image=image,
-                    error=str(e),
-                )
+                logger.error(f"Failed to parse Trivy output for {image}: {e}")
                 span.set_attribute("scan.success", False)
                 span.set_attribute("scan.error", "parse_error")
                 return None

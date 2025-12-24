@@ -46,28 +46,24 @@ class KubernetesClient:
                 # Get all namespaces
                 namespaces = self._get_namespaces()
                 span.set_attribute("k8s.namespaces.count", len(namespaces))
-                logger.info("Found namespaces", count=len(namespaces), namespaces=namespaces)
+                logger.info(f"Found {len(namespaces)} namespaces: {namespaces}")
 
                 # Get images from pods in each namespace
                 for namespace in namespaces:
                     namespace_images = self._get_namespace_images(namespace)
                     images.update(namespace_images)
-                    logger.info(
-                        "Found images in namespace",
-                        namespace=namespace,
-                        count=len(namespace_images),
-                    )
+                    logger.info(f"Found {len(namespace_images)} images in namespace {namespace}")
 
                 span.set_attribute("k8s.images.total", len(images))
                 span.set_attribute("k8s.operation.success", True)
 
             except ApiException as e:
-                logger.error("Kubernetes API error", error=str(e), status=e.status)
+                logger.error(f"Kubernetes API error (status {e.status}): {e}")
                 span.set_attribute("k8s.operation.success", False)
                 span.set_attribute("k8s.operation.error", str(e))
                 raise
 
-            logger.info("Total unique images discovered", count=len(images))
+            logger.info(f"Total unique images discovered: {len(images)}")
             return images
 
     def _get_namespaces(self) -> list[str]:
@@ -121,11 +117,7 @@ class KubernetesClient:
                 span.set_attribute("k8s.operation.success", True)
 
             except ApiException as e:
-                logger.warning(
-                    "Failed to get pods in namespace",
-                    namespace=namespace,
-                    error=str(e),
-                )
+                logger.warning(f"Failed to get pods in namespace {namespace}: {e}")
                 span.set_attribute("k8s.operation.success", False)
                 span.set_attribute("k8s.operation.error", str(e))
 
