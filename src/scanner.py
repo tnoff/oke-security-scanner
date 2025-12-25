@@ -135,26 +135,28 @@ class TrivyScanner:
 
                 # Parse results
                 scan_results = json.loads(result.stdout)
-                vulnerabilities = self._parse_vulnerabilities(scan_results)
+                parsed_vulns = self._parse_vulnerabilities(scan_results)
+                vuln_counts = parsed_vulns["counts"]
+                vuln_cves = parsed_vulns["cves"]
 
                 # Log results
                 logger.info(
                     f"Image scan completed: {image} "
                     f"(duration: {round(duration, 2)}s, "
-                    f"critical: {vulnerabilities.get('CRITICAL', 0)}, "
-                    f"high: {vulnerabilities.get('HIGH', 0)})"
+                    f"critical: {vuln_counts.get('CRITICAL', 0)}, "
+                    f"high: {vuln_counts.get('HIGH', 0)})"
                 )
 
                 # Record metrics - set gauge with image and vulnerability counts
                 self.metrics["scan_total"].set(
-                    vulnerabilities.get("CRITICAL", 0),
+                    vuln_counts.get("CRITICAL", 0),
                     {
                         "image": image,
                         "severity": "critical",
                     }
                 )
                 self.metrics["scan_total"].set(
-                    vulnerabilities.get("HIGH", 0),
+                    vuln_counts.get("HIGH", 0),
                     {
                         "image": image,
                         "severity": "high",
@@ -164,13 +166,14 @@ class TrivyScanner:
                 # Set span attributes
                 span.set_attribute("scan.success", True)
                 span.set_attribute("scan.duration", duration)
-                span.set_attribute("vulnerabilities.critical", vulnerabilities.get("CRITICAL", 0))
-                span.set_attribute("vulnerabilities.high", vulnerabilities.get("HIGH", 0))
+                span.set_attribute("vulnerabilities.critical", vuln_counts.get("CRITICAL", 0))
+                span.set_attribute("vulnerabilities.high", vuln_counts.get("HIGH", 0))
 
                 return {
                     "image": image,
                     "duration": duration,
-                    "vulnerabilities": vulnerabilities,
+                    "vulnerabilities": vuln_counts,
+                    "cves": vuln_cves,
                     "results": scan_results,
                 }
 
@@ -192,25 +195,42 @@ class TrivyScanner:
                 span.set_attribute("scan.error", "parse_error")
                 return None
 
-    def _parse_vulnerabilities(self, scan_results: dict) -> dict[str, int]:
-        """Parse vulnerability counts by severity from Trivy results."""
+    def _parse_vulnerabilities(self, scan_results: dict) -> dict:
+        """Parse vulnerability counts and CVE details from Trivy results.
+
+        Returns:
+            Dictionary with 'counts' and 'cves' keys
+        """
         vulnerabilities = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        cve_details = {}
 
         if not scan_results or "Results" not in scan_results:
-            return vulnerabilities
+            return {"counts": vulnerabilities, "cves": cve_details}
 
         for result in scan_results.get("Results", []):
             for vuln in result.get("Vulnerabilities", []):
                 severity = vuln.get("Severity", "UNKNOWN")
+                cve_id = vuln.get("VulnerabilityID")
+
                 if severity in vulnerabilities:
                     vulnerabilities[severity] += 1
+
+                    # Store CVE details for webhook reporting
+                    if cve_id:
+                        cve_details[cve_id] = {
+                            "severity": severity,
+                            "title": vuln.get("Title", ""),
+                            "package": vuln.get("PkgName", ""),
+                            "installed": vuln.get("InstalledVersion", ""),
+                            "fixed": vuln.get("FixedVersion", ""),
+                        }
 
                     # Log individual critical/high vulnerabilities
                     if severity in ["CRITICAL", "HIGH"]:
                         logger.warning(
-                            f"{severity} vulnerability found: {vuln.get('VulnerabilityID')} in "
+                            f"{severity} vulnerability found: {cve_id} in "
                             f"{vuln.get('PkgName')} {vuln.get('InstalledVersion')} "
                             f"(fixed: {vuln.get('FixedVersion')}) - {vuln.get('Title', '')[:100]}"
                         )
 
-        return vulnerabilities
+        return {"counts": vulnerabilities, "cves": cve_details}

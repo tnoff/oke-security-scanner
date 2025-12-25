@@ -18,6 +18,7 @@ disable=
     too-many-branches,
     too-many-arguments,
     too-many-locals,
+    too-many-positional-arguments,
     too-many-instance-attributes,
     line-too-long,
     logging-fstring-interpolation,

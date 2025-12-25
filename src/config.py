@@ -26,6 +26,9 @@ class Config:
     namespaces: list[str]
     exclude_namespaces: list[str]
 
+    # Discord webhook configuration (optional - enabled if URL provided)
+    discord_webhook_url: str
+
     @classmethod
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
@@ -47,6 +50,9 @@ class Config:
             # Scanning configuration
             namespaces=os.getenv("SCAN_NAMESPACES", "").split(",") if os.getenv("SCAN_NAMESPACES") else [],
             exclude_namespaces=os.getenv("EXCLUDE_NAMESPACES", "kube-system,kube-public,kube-node-lease").split(","),
+
+            # Discord webhook configuration (optional - enabled if URL provided)
+            discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", ""),
         )
 
     def validate(self) -> None:

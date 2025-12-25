@@ -12,6 +12,7 @@ from .config import Config
 from .telemetry import setup_telemetry, create_metrics
 from .k8s_client import KubernetesClient
 from .scanner import TrivyScanner
+from .discord_notifier import DiscordNotifier
 
 
 logger = getLogger(__name__)
@@ -142,6 +143,25 @@ def main():
             else:
                 logger.info("✓ No critical vulnerabilities found - scan passed")
                 root_span.set_attribute("scan.has_critical", False)
+
+            # Send Discord webhook notification if configured
+            if config.discord_webhook_url:
+                try:
+                    logger.debug("Sending Discord webhook notification...")
+                    notifier = DiscordNotifier(config.discord_webhook_url)
+                    notifier.send_scan_report(
+                        scan_results=scan_results,
+                        total_critical=total_critical,
+                        total_high=total_high,
+                        duration=total_duration,
+                        total_images=len(images),
+                    )
+                    logger.info("✓ Discord notification sent")
+                except Exception as e:
+                    # Webhook failure doesn't fail the scan
+                    logger.warning(f"Failed to send Discord notification: {e}")
+            else:
+                logger.debug("Discord webhook not configured, skipping notification")
 
             logger.info("Scan completed successfully")
 
