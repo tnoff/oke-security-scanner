@@ -16,10 +16,6 @@ logger = getLogger(__name__)
 
 def main():
     """Run the security scanner."""
-    trace_provider = None
-    meter_provider = None
-    logger_provider = None
-
     try:
         # Load configuration
         config = Config.from_env()
@@ -29,12 +25,11 @@ def main():
         # Setup OpenTelemetry
         trace_provider, meter_provider, logger_provider = setup_telemetry()
         logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
-        meter = meter_provider.get_meter(__name__, '0.0.1')
-        metrics = create_metrics(meter)
+        metrics = create_metrics(meter_provider)
         logger.info(f"OpenTelemetry initialized (endpoint: {config.otlp_endpoint})")
 
         # Start root trace span
-        with trace_provider.get_tracer(__name__).start_as_current_span("security-scan") as root_span:
+        with trace_provider.start_as_current_span("security-scan") as root_span:
             start_time = time.time()
 
             # Initialize scanner
@@ -100,20 +95,6 @@ def main():
     except Exception as e:
         logger.exception(f"Unexpected error during security scan: {e}")
         sys.exit(1)
-    finally:
-        # Properly shutdown telemetry to flush all pending data
-        if trace_provider:
-            logger.info("Flushing traces...")
-            trace_provider.force_flush(timeout_millis=30000)
-            trace_provider.shutdown()
-        if meter_provider:
-            logger.info("Flushing metrics...")
-            meter_provider.force_flush(timeout_millis=30000)
-            meter_provider.shutdown()
-        if logger_provider:
-            logger.info("Flushing logs...")
-            logger_provider.force_flush(timeout_millis=30000)
-            logger_provider.shutdown()
 
 
 if __name__ == "__main__":
