@@ -13,6 +13,7 @@ recursive=yes
 disable=
     missing-module-docstring,
     missing-function-docstring,
+    too-many-statements,
     too-few-public-methods,
     too-many-arguments,
     too-many-locals,
