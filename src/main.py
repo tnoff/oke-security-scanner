@@ -5,6 +5,7 @@ import time
 import logging
 from logging import getLogger
 
+from opentelemetry import trace, metrics
 from opentelemetry.sdk._logs import LoggingHandler
 
 from .config import Config
@@ -30,6 +31,8 @@ def main():
     logger.info("Starting OKE Security Scanner")
     logger.info("=" * 60)
 
+    logger_provider = None
+
     try:
         # Load configuration
         logger.debug("Loading configuration from environment variables")
@@ -44,7 +47,7 @@ def main():
         logger.debug("Initializing OpenTelemetry")
         trace_provider, meter_provider, logger_provider = setup_telemetry()
         logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
-        metrics = create_metrics(meter_provider)
+        scanner_metrics = create_metrics(meter_provider)
         logger.info(f"✓ OpenTelemetry initialized (endpoint: {config.otlp_endpoint})")
 
         # Start root trace span
@@ -56,7 +59,7 @@ def main():
 
             # Initialize scanner
             logger.debug("Initializing Trivy scanner")
-            scanner = TrivyScanner(config, metrics, logger_provider)
+            scanner = TrivyScanner(config, scanner_metrics, logger_provider)
             logger.info("✓ Trivy scanner initialized")
 
             # Update Trivy database
@@ -147,6 +150,33 @@ def main():
     except Exception as e:
         logger.exception(f"Unexpected error during security scan: {e}")
         sys.exit(1)
+    finally:
+        # Properly shutdown telemetry to flush all pending data
+        logger.info("Shutting down telemetry...")
+
+        # Get providers from global registry
+        trace_provider = trace.get_tracer_provider()
+        meter_provider = metrics.get_meter_provider()
+
+        if trace_provider:
+            logger.debug("Flushing traces...")
+            trace_provider.force_flush(timeout_millis=30000)
+            trace_provider.shutdown()
+            logger.debug("✓ Traces flushed")
+
+        if meter_provider:
+            logger.debug("Flushing metrics...")
+            meter_provider.force_flush(timeout_millis=30000)
+            meter_provider.shutdown()
+            logger.debug("✓ Metrics flushed")
+
+        if logger_provider:
+            logger.debug("Flushing logs...")
+            logger_provider.force_flush(timeout_millis=30000)
+            logger_provider.shutdown()
+            logger.debug("✓ Logs flushed")
+
+        logger.info("✓ Telemetry shutdown complete")
 
 
 if __name__ == "__main__":

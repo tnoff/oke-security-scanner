@@ -15,6 +15,7 @@ disable=
     missing-function-docstring,
     too-many-statements,
     too-few-public-methods,
+    too-many-branches,
     too-many-arguments,
     too-many-locals,
     too-many-instance-attributes,
