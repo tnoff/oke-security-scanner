@@ -133,16 +133,17 @@ def main():
             root_span.set_attribute("scan.vulnerabilities.critical", total_critical)
             root_span.set_attribute("scan.vulnerabilities.high", total_high)
 
-            # Exit with error if critical vulnerabilities found
+            # Report critical vulnerabilities but don't fail the job
             if total_critical > 0:
-                logger.error("✗ CRITICAL VULNERABILITIES DETECTED!")
-                logger.error(f"  Found {total_critical} critical vulnerabilities")
-                logger.error("  Exiting with error code 1")
+                logger.warning("⚠ CRITICAL VULNERABILITIES DETECTED!")
+                logger.warning(f"  Found {total_critical} critical vulnerabilities")
+                logger.warning("  Review the scan results above for details")
                 root_span.set_attribute("scan.has_critical", True)
-                sys.exit(1)
+            else:
+                logger.info("✓ No critical vulnerabilities found - scan passed")
+                root_span.set_attribute("scan.has_critical", False)
 
-            logger.info("✓ No critical vulnerabilities found - scan passed")
-            root_span.set_attribute("scan.has_critical", False)
+            logger.info("Scan completed successfully")
 
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
