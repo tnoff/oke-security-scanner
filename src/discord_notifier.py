@@ -1,8 +1,9 @@
 """Discord webhook notification for scan results."""
 
 from logging import getLogger
+import time
 
-from dappertable import DapperTable, PaginationLength
+from dappertable import DapperTable, DapperTableHeader, DapperTableHeaderOptions, PaginationLength
 import requests
 
 logger = getLogger(__name__)
@@ -41,29 +42,35 @@ class DiscordNotifier:
             True if all messages sent successfully, False otherwise
         """
         try:
-            # Use dappertable to handle pagination at Discord's 2000 char limit
-            # No header_options = no table headers, just paginated text
-            # Use code block formatting for better Discord display
-            table = DapperTable(
-                pagination_options=PaginationLength(self.max_length),
-                enclosure_start="```",
-                enclosure_end="```",
+            messages = []
+
+            # Build summary message
+            summary = (
+                f"Security Scan Complete\n"
+                f"Scanned: {total_images} images in {duration:.1f}s\n"
+                f"Critical: {total_critical} | High: {total_high}"
             )
+            messages.append(summary)
 
-            # Build content directly into table
-            self._build_summary(table, total_images, total_critical, total_high, duration)
-            self._build_vulnerability_section(table, scan_results, "CRITICAL", "🔴 CRITICAL")
-            self._build_vulnerability_section(table, scan_results, "HIGH", "🟠 HIGH")
+            # Build Critical vulnerabilities table
+            if total_critical > 0:
+                critical_table = self._build_vulnerability_table(scan_results, "CRITICAL")
+                if critical_table:
+                    messages.extend(critical_table)
 
-            # Get paginated messages
-            messages = table.print()
-            if isinstance(messages, str):
-                messages = [messages]
+            # Build High vulnerabilities table
+            if total_high > 0:
+                high_table = self._build_vulnerability_table(scan_results, "HIGH")
+                if high_table:
+                    messages.extend(high_table)
 
-            # Send each message
+            # Send each message with rate limiting delay
             for idx, msg in enumerate(messages, 1):
                 logger.debug(f"Sending Discord message {idx}/{len(messages)} ({len(msg)} chars)")
                 self._send_message(msg)
+                # Add delay between messages to avoid rate limiting (except after last message)
+                if idx < len(messages):
+                    time.sleep(1)
 
             logger.info(f"Successfully sent {len(messages)} Discord message(s)")
             return True
@@ -72,76 +79,59 @@ class DiscordNotifier:
             logger.error(f"Failed to send Discord notification: {e}")
             return False
 
-    def _build_summary(
-        self, table: DapperTable, total_images: int, critical: int, high: int, duration: float
-    ) -> None:
-        """Build scan summary header.
+    def _build_vulnerability_table(self, results: list[dict], severity: str) -> list[str]:
+        """Build a table of vulnerabilities for a specific severity level.
 
         Args:
-            table: DapperTable to add rows to
-            total_images: Number of images scanned
-            critical: Critical vulnerability count
-            high: High vulnerability count
-            duration: Scan duration in seconds
-        """
-        table.add_row("**Security Scan Complete**")
-        table.add_row(f"📊 Scanned: {total_images} images in {duration:.1f}s")
-        table.add_row(f"🔴 Critical: {critical} | 🟠 High: {high}")
-        table.add_row("")
-
-    def _build_vulnerability_section(
-        self, table: DapperTable, results: list[dict], severity: str, emoji_header: str
-    ) -> None:
-        """Build section for specific severity level.
-
-        Args:
-            table: DapperTable to add rows to
             results: List of scan result dictionaries
             severity: Severity level to filter (CRITICAL or HIGH)
-            emoji_header: Header text with emoji
-        """
-        # Group by CVE
-        cve_to_images: dict[str, dict] = {}
 
+        Returns:
+            List of message strings (paginated if needed)
+        """
+        # Define table headers with column widths
+        headers = DapperTableHeaderOptions([
+            DapperTableHeader("Image", 30),
+            DapperTableHeader("CVE", 20),
+            DapperTableHeader("Fixed", 15),
+        ])
+
+        # Create table with headers and pagination
+        table = DapperTable(
+            header_options=headers,
+            pagination_options=PaginationLength(self.max_length),
+            prefix=f"{severity} Vulnerabilities:\n",
+            enclosure_start="```",
+            enclosure_end="```",
+        )
+
+        # Collect all vulnerabilities for this severity
+        rows = []
         for result in results:
             image = result.get("image", "unknown")
             cves = result.get("cves", {})
 
+            # Extract short image name (remove registry prefix)
+            short_name = image.split("/")[-1] if "/" in image else image
+
             for cve_id, details in cves.items():
                 if details.get("severity") == severity:
-                    if cve_id not in cve_to_images:
-                        cve_to_images[cve_id] = {
-                            "title": details.get("title", ""),
-                            "images": set(),
-                        }
-                    # Extract short image name (remove registry prefix)
-                    short_name = image.split("/")[-1] if "/" in image else image
-                    cve_to_images[cve_id]["images"].add(short_name)
+                    fixed_version = details.get("fixed", "")
+                    fixed_status = fixed_version if fixed_version else "No fix"
+                    rows.append([short_name, cve_id, fixed_status])
 
-        if not cve_to_images:
-            table.add_row("")
-            table.add_row(f"**{emoji_header} Vulnerabilities**")
-            table.add_row("None found ✅")
-            table.add_row("")
-            return
+        # Sort rows by image name, then CVE ID
+        rows.sort(key=lambda x: (x[0], x[1]))
 
-        # Add header
-        table.add_row("")
-        table.add_row(f"**{emoji_header} Vulnerabilities ({len(cve_to_images)} unique)**")
+        # Add rows to table
+        for row in rows:
+            table.add_row(row)
 
-        for cve_id, data in sorted(cve_to_images.items()):
-            # Truncate long titles
-            title = data["title"]
-            title_short = title[:60] + "..." if len(title) > 60 else title
-
-            # Show up to 3 images, then count remaining
-            images_list = sorted(data["images"])
-            images_str = ", ".join(images_list[:3])
-            if len(images_list) > 3:
-                images_str += f" +{len(images_list) - 3} more"
-
-            table.add_row(f"• **{cve_id}**: {title_short}")
-            table.add_row(f"  Affects: {images_str}")
+        # Return paginated messages
+        messages = table.print()
+        if isinstance(messages, str):
+            return [messages]
+        return messages
 
     def _send_message(self, content: str) -> None:
         """Send single message to Discord webhook.
