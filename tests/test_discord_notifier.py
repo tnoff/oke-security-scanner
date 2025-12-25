@@ -57,19 +57,27 @@ class TestDiscordNotifier:
 
     def test_build_summary(self, notifier):
         """Test _build_summary method."""
-        summary = notifier._build_summary(10, 5, 15, 123.45)
+        mock_table = Mock()
+        notifier._build_summary(mock_table, 10, 5, 15, 123.45)
 
-        assert "Security Scan Complete" in summary
-        assert "10 images" in summary
-        assert "123.5s" in summary
-        assert "Critical: 5" in summary
-        assert "High: 15" in summary
+        # Verify the correct rows were added
+        calls = mock_table.add_row.call_args_list
+        assert len(calls) == 4
+        assert calls[0] == call("**Security Scan Complete**")
+        assert calls[1] == call("📊 Scanned: 10 images in 123.5s")
+        assert calls[2] == call("🔴 Critical: 5 | 🟠 High: 15")
+        assert calls[3] == call("")
 
     def test_build_vulnerability_section_with_cves(self, notifier, sample_scan_results):
         """Test _build_vulnerability_section with CVEs present."""
-        section = notifier._build_vulnerability_section(
-            sample_scan_results, "CRITICAL", "🔴 CRITICAL"
+        mock_table = Mock()
+        notifier._build_vulnerability_section(
+            mock_table, sample_scan_results, "CRITICAL", "🔴 CRITICAL"
         )
+
+        # Get all the rows that were added
+        calls = [str(call[0][0]) for call in mock_table.add_row.call_args_list]
+        section = "\n".join(calls)
 
         assert "🔴 CRITICAL Vulnerabilities (1 unique)" in section
         assert "CVE-2023-1234" in section
@@ -79,16 +87,26 @@ class TestDiscordNotifier:
 
     def test_build_vulnerability_section_no_cves(self, notifier):
         """Test _build_vulnerability_section with no CVEs."""
-        section = notifier._build_vulnerability_section([], "CRITICAL", "🔴 CRITICAL")
+        mock_table = Mock()
+        notifier._build_vulnerability_section(mock_table, [], "CRITICAL", "🔴 CRITICAL")
+
+        # Get all the rows that were added
+        calls = [str(call[0][0]) for call in mock_table.add_row.call_args_list]
+        section = "\n".join(calls)
 
         assert "🔴 CRITICAL Vulnerabilities" in section
         assert "None found ✅" in section
 
     def test_build_vulnerability_section_groups_by_cve(self, notifier, sample_scan_results):
         """Test that CVEs are grouped across images."""
-        section = notifier._build_vulnerability_section(
-            sample_scan_results, "CRITICAL", "🔴 CRITICAL"
+        mock_table = Mock()
+        notifier._build_vulnerability_section(
+            mock_table, sample_scan_results, "CRITICAL", "🔴 CRITICAL"
         )
+
+        # Get all the rows that were added
+        calls = [str(call[0][0]) for call in mock_table.add_row.call_args_list]
+        section = "\n".join(calls)
 
         # Should show CVE-2023-1234 once with both images listed
         assert section.count("CVE-2023-1234") == 1
@@ -111,7 +129,12 @@ class TestDiscordNotifier:
             }
         ]
 
-        section = notifier._build_vulnerability_section(results, "CRITICAL", "🔴 CRITICAL")
+        mock_table = Mock()
+        notifier._build_vulnerability_section(mock_table, results, "CRITICAL", "🔴 CRITICAL")
+
+        # Get all the rows that were added
+        calls = [str(call[0][0]) for call in mock_table.add_row.call_args_list]
+        section = "\n".join(calls)
 
         # Should be truncated to 60 chars + "..."
         assert "AAA..." in section
@@ -134,7 +157,12 @@ class TestDiscordNotifier:
                 },
             })
 
-        section = notifier._build_vulnerability_section(results, "CRITICAL", "🔴 CRITICAL")
+        mock_table = Mock()
+        notifier._build_vulnerability_section(mock_table, results, "CRITICAL", "🔴 CRITICAL")
+
+        # Get all the rows that were added
+        calls = [str(call[0][0]) for call in mock_table.add_row.call_args_list]
+        section = "\n".join(calls)
 
         assert "+2 more" in section  # Should show first 3 + "2 more"
 
@@ -219,7 +247,9 @@ class TestDiscordNotifier:
         assert result is True
         # Verify DapperTable was created and used
         mock_dappertable_class.assert_called_once()
-        mock_table.add_row.assert_called_once()
+        # add_row should be called multiple times (for summary, critical and high sections)
+        assert mock_table.add_row.called
+        assert mock_table.add_row.call_count > 1
         mock_table.print.assert_called_once()
         # Should send both messages
         assert mock_post.call_count == 2
@@ -241,7 +271,12 @@ class TestDiscordNotifier:
             }
         ]
 
-        section = notifier._build_vulnerability_section(results, "CRITICAL", "🔴 CRITICAL")
+        mock_table = Mock()
+        notifier._build_vulnerability_section(mock_table, results, "CRITICAL", "🔴 CRITICAL")
+
+        # Get all the rows that were added
+        calls = [str(call[0][0]) for call in mock_table.add_row.call_args_list]
+        section = "\n".join(calls)
 
         # Should show shortened name, not full path
         assert "myapp:v1.0.0" in section
