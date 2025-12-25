@@ -29,7 +29,8 @@ def main():
         # Setup OpenTelemetry
         trace_provider, meter_provider, logger_provider = setup_telemetry()
         logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
-        metrics = create_metrics(meter_provider)
+        meter = meter_provider.get_meter(__name__, '0.0.1')
+        metrics = create_metrics(meter)
         logger.info(f"OpenTelemetry initialized (endpoint: {config.otlp_endpoint})")
 
         # Start root trace span

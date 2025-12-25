@@ -13,10 +13,9 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.metrics import get_meter_provider
 
 
-def setup_telemetry() -> tuple[trace.Tracer, metrics.Meter]:
+def setup_telemetry() -> tuple[TracerProvider, MeterProvider, LoggerProvider]:
     """Initialize OpenTelemetry with OTLP exporters."""
 
     resource = get_aggregated_resources(detectors=[OTELResourceDetector()])
@@ -42,10 +41,8 @@ def setup_telemetry() -> tuple[trace.Tracer, metrics.Meter]:
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
     logging.getLogger().addHandler(handler)
 
-    # providers
-    tracer = trace.get_tracer(__name__)
-    meter = get_meter_provider().get_meter(__name__, '0.0.1')
-    return tracer, meter, logger_provider
+    # Return providers for proper shutdown
+    return trace_provider, meter_provider, logger_provider
 
 def create_metrics(meter: metrics.Meter):
     """Create application metrics."""
