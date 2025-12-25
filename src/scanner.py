@@ -43,8 +43,11 @@ class TrivyScanner:
             docker_config_dir = Path.home() / ".docker"
             docker_config_dir.mkdir(exist_ok=True)
 
+            # OCIR requires username format: <namespace>/<username>
+            ocir_username = f"{self.cfg.oci_namespace}/{self.cfg.oci_username}"
+
             # Create auth token (base64 encode username:password)
-            auth_string = f"{self.cfg.oci_username}:{self.cfg.oci_token}"
+            auth_string = f"{ocir_username}:{self.cfg.oci_token}"
             auth_token = base64.b64encode(auth_string.encode()).decode()
 
             # Create Docker config.json
