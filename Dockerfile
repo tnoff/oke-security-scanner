@@ -6,6 +6,7 @@ RUN apt-get update && \
     wget \
     tar \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Trivy from GitHub releases
@@ -24,6 +25,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ ./src/
+
+# Uninstall some previous packages
+RUN apt-get remove -y git && apt-get autoremove -y
 
 # Run as non-root user
 RUN useradd -m -u 1000 scanner && \
