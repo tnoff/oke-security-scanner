@@ -41,21 +41,19 @@ class DiscordNotifier:
             True if all messages sent successfully, False otherwise
         """
         try:
-            # Build complete message content
-            summary = self._build_summary(total_images, total_critical, total_high, duration)
-            critical_section = self._build_vulnerability_section(scan_results, "CRITICAL", "🔴 CRITICAL")
-            high_section = self._build_vulnerability_section(scan_results, "HIGH", "🟠 HIGH")
-
-            # Combine all sections
-            full_content = summary + critical_section + high_section
-
             # Use dappertable to handle pagination at Discord's 2000 char limit
             # No header_options = no table headers, just paginated text
+            # Use code block formatting for better Discord display
             table = DapperTable(
                 pagination_options=PaginationLength(self.max_length),
+                enclosure_start="```",
+                enclosure_end="```",
             )
-            # Add the full content as a single row
-            table.add_row([full_content])
+
+            # Build content directly into table
+            self._build_summary(table, total_images, total_critical, total_high, duration)
+            self._build_vulnerability_section(table, scan_results, "CRITICAL", "🔴 CRITICAL")
+            self._build_vulnerability_section(table, scan_results, "HIGH", "🟠 HIGH")
 
             # Get paginated messages
             messages = table.print()
@@ -75,36 +73,32 @@ class DiscordNotifier:
             return False
 
     def _build_summary(
-        self, total_images: int, critical: int, high: int, duration: float
-    ) -> str:
+        self, table: DapperTable, total_images: int, critical: int, high: int, duration: float
+    ) -> None:
         """Build scan summary header.
 
         Args:
+            table: DapperTable to add rows to
             total_images: Number of images scanned
             critical: Critical vulnerability count
             high: High vulnerability count
             duration: Scan duration in seconds
-
-        Returns:
-            Formatted summary string
         """
-        return f"""**Security Scan Complete**
-📊 Scanned: {total_images} images in {duration:.1f}s
-🔴 Critical: {critical} | 🟠 High: {high}
-"""
+        table.add_row("**Security Scan Complete**")
+        table.add_row(f"📊 Scanned: {total_images} images in {duration:.1f}s")
+        table.add_row(f"🔴 Critical: {critical} | 🟠 High: {high}")
+        table.add_row("")
 
     def _build_vulnerability_section(
-        self, results: list[dict], severity: str, emoji_header: str
-    ) -> str:
+        self, table: DapperTable, results: list[dict], severity: str, emoji_header: str
+    ) -> None:
         """Build section for specific severity level.
 
         Args:
+            table: DapperTable to add rows to
             results: List of scan result dictionaries
             severity: Severity level to filter (CRITICAL or HIGH)
             emoji_header: Header text with emoji
-
-        Returns:
-            Formatted vulnerability section string
         """
         # Group by CVE
         cve_to_images: dict[str, dict] = {}
@@ -125,10 +119,15 @@ class DiscordNotifier:
                     cve_to_images[cve_id]["images"].add(short_name)
 
         if not cve_to_images:
-            return f"\n**{emoji_header} Vulnerabilities**\nNone found ✅\n"
+            table.add_row("")
+            table.add_row(f"**{emoji_header} Vulnerabilities**")
+            table.add_row("None found ✅")
+            table.add_row("")
+            return
 
-        # Format output
-        lines = [f"\n**{emoji_header} Vulnerabilities ({len(cve_to_images)} unique)**"]
+        # Add header
+        table.add_row("")
+        table.add_row(f"**{emoji_header} Vulnerabilities ({len(cve_to_images)} unique)**")
 
         for cve_id, data in sorted(cve_to_images.items()):
             # Truncate long titles
@@ -141,10 +140,8 @@ class DiscordNotifier:
             if len(images_list) > 3:
                 images_str += f" +{len(images_list) - 3} more"
 
-            lines.append(f"• **{cve_id}**: {title_short}")
-            lines.append(f"  Affects: {images_str}")
-
-        return "\n".join(lines)
+            table.add_row(f"• **{cve_id}**: {title_short}")
+            table.add_row(f"  Affects: {images_str}")
 
     def _send_message(self, content: str) -> None:
         """Send single message to Discord webhook.
