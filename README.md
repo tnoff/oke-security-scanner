@@ -63,6 +63,7 @@ kubectl create secret generic security-scanner-secrets \
   --from-literal=TRIVY_SEVERITY="CRITICAL,HIGH" \
   --from-literal=TRIVY_TIMEOUT="300" \
   --from-literal=EXCLUDE_NAMESPACES="kube-system,kube-public,kube-node-lease" \
+  --from-literal=DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your-webhook-url" \
   --namespace=default
 ```
 
@@ -110,6 +111,7 @@ All configuration is provided via Kubernetes secrets as environment variables:
 | `TRIVY_TIMEOUT` | ❌ | `300` | Scan timeout in seconds |
 | `SCAN_NAMESPACES` | ❌ | (all) | Comma-separated namespaces to scan |
 | `EXCLUDE_NAMESPACES` | ❌ | `kube-system,...` | Namespaces to exclude |
+| `DISCORD_WEBHOOK_URL` | ❌ | (disabled) | Discord webhook URL for scan notifications |
 
 ### CronJob Schedule
 
@@ -175,6 +177,34 @@ Create dashboards showing:
 - Images with most critical CVEs
 - Scan success rate
 - Trivy DB freshness
+
+## Discord Notifications
+
+The scanner can send scan result notifications to Discord via webhooks. This is optional and enabled when `DISCORD_WEBHOOK_URL` is configured.
+
+### Features
+
+- Formatted scan reports with vulnerability counts
+- Paginated table showing top 10 most vulnerable images
+- Color-coded severity indicators (CRITICAL and HIGH)
+- Scan duration and image count summary
+- Non-blocking: webhook failures don't affect scan execution
+
+### Setup
+
+1. Create a Discord webhook in your server:
+   - Go to Server Settings > Integrations > Webhooks
+   - Click "New Webhook"
+   - Copy the webhook URL
+
+2. Add the webhook URL to your Kubernetes secret:
+   ```bash
+   kubectl create secret generic security-scanner-secrets \
+     --from-literal=DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your-webhook-url" \
+     # ... other configuration ...
+   ```
+
+3. The scanner will automatically send notifications after each scan completes
 
 ## Development
 
