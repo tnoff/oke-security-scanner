@@ -100,7 +100,8 @@ oke-security-scanner/
 │   ├── config.py         # Environment variable configuration
 │   ├── telemetry.py      # OpenTelemetry setup (traces, metrics, logs)
 │   ├── k8s_client.py     # Kubernetes API client for image discovery
-│   └── scanner.py        # Trivy scanner wrapper
+│   ├── scanner.py        # Trivy scanner wrapper
+│   └── discord_notifier.py  # Discord webhook notifications
 ├── k8s/                  # Kubernetes manifests (EXAMPLES - customize before use)
 │   ├── rbac.yaml         # ServiceAccount, ClusterRole, ClusterRoleBinding
 │   ├── cronjob.yaml      # CronJob definition (schedule: daily at 2 AM UTC)
@@ -185,8 +186,31 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 - `TRIVY_TIMEOUT` - Scan timeout in seconds (default: 300)
 - `SCAN_NAMESPACES` - Comma-separated namespaces to scan (optional)
 - `EXCLUDE_NAMESPACES` - Namespaces to exclude (default: kube-system,kube-public,kube-node-lease)
+- `DISCORD_WEBHOOK_URL` - Discord webhook URL for scan notifications (optional)
 
 **Validation:** The `validate()` method checks required fields are present.
+
+### src/discord_notifier.py
+**Purpose:** Send scan result notifications to Discord webhooks
+
+**Key methods:**
+- `send_scan_report(scan_results, total_critical, total_high, duration, total_images)` - Sends formatted scan report
+- `_format_table(scan_results)` - Creates paginated table of top 10 vulnerable images using DapperTable
+
+**Features:**
+- Optional integration enabled via `DISCORD_WEBHOOK_URL` environment variable
+- Displays vulnerability counts (CRITICAL and HIGH) with color coding
+- Paginated table format showing top 10 most vulnerable images
+- Non-blocking: failures logged but don't affect scan execution
+- Uses DapperTable library with custom headers for professional formatting
+
+**Dependencies:**
+- `requests` - HTTP library for webhook calls
+- `dappertable` - Table formatting library for Discord code blocks
+
+**Error handling:**
+- All webhook failures are caught and logged as warnings
+- Scanner continues normally even if notification fails
 
 ## Kubernetes Manifests
 
@@ -367,12 +391,15 @@ kubectl logs -f job/manual-scan-<timestamp>
 **Python packages (requirements.txt):**
 - `kubernetes` - Kubernetes API client
 - `opentelemetry-*` - OTLP SDK, exporters, instrumentation
+- `requests` - HTTP library for Discord webhook calls
+- `dappertable` - Table formatting for Discord notifications
 - System dependencies: Trivy binary (installed in Dockerfile)
 
 **External services:**
 - OCIR for image storage
 - OTLP collector (Tempo/Loki/Mimir)
 - Kubernetes API
+- Discord webhooks (optional)
 
 ## Integration with github-workflows Repository
 

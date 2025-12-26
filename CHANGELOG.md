@@ -5,6 +5,22 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] - 2025-12-26
+
+### Added
+- Discord webhook integration for scan result notifications
+  - Sends formatted scan reports with vulnerability counts and image details
+  - Displays top 10 vulnerable images in a paginated table format
+  - Optional configuration via `DISCORD_WEBHOOK_URL` environment variable
+  - Non-blocking: webhook failures don't fail the scan
+- HIGH severity logging alongside CRITICAL vulnerabilities
+
+### Changed
+- Updated DapperTable library usage with new header API
+  - Migrated to `DapperTableHeaderOptions` and `DapperTableHeader` for improved table formatting
+  - Enhanced Discord notification table presentation
+- Improved logging to include both CRITICAL and HIGH severity findings
+
 ## [0.0.2] - 2025-12-25
 
 ### Fixed
