@@ -194,19 +194,26 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 **Purpose:** Send scan result notifications to Discord webhooks
 
 **Key methods:**
-- `send_scan_report(scan_results, total_critical, total_high, duration, total_images)` - Sends formatted scan report
-- `_format_table(scan_results)` - Creates paginated table of top 10 vulnerable images using DapperTable
+- `send_scan_report(scan_results, total_critical, total_high, duration, total_images)` - Sends formatted scan report with CSV attachment
+- `_build_vulnerability_table(results, severity, only_with_fixes)` - Creates formatted table for specific severity level, optionally filtering for fixes only
+- `_generate_csv(results)` - Generates CSV data with all vulnerabilities sorted by severity
+- `_send_message(content, csv_file)` - Sends message via webhook with optional file attachment
 
 **Features:**
 - Optional integration enabled via `DISCORD_WEBHOOK_URL` environment variable
-- Displays vulnerability counts (CRITICAL and HIGH) with color coding
-- Paginated table format showing top 10 most vulnerable images
+- Displays scan summary and critical vulnerabilities **with fixes** in the channel message
+- Attaches comprehensive CSV file with all vulnerabilities (CRITICAL, HIGH, MEDIUM, LOW)
+- CSV sorted by severity for easy prioritization
+- Single message format (no pagination) to reduce Discord channel spam
+- Uses multipart/form-data for file uploads
 - Non-blocking: failures logged but don't affect scan execution
 - Uses DapperTable library with custom headers for professional formatting
 
 **Dependencies:**
 - `requests` - HTTP library for webhook calls
 - `dappertable` - Table formatting library for Discord code blocks
+- `csv` - Standard library for CSV generation
+- `io.StringIO` - In-memory file handling for CSV data
 
 **Error handling:**
 - All webhook failures are caught and logged as warnings

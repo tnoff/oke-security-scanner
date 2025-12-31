@@ -122,7 +122,7 @@ class TestDiscordNotifier:
 
     @patch('src.discord_notifier.requests.post')
     def test_send_message_success(self, mock_post, notifier):
-        """Test successful message sending."""
+        """Test successful message sending without file."""
         mock_response = Mock()
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
@@ -137,8 +137,28 @@ class TestDiscordNotifier:
         mock_response.raise_for_status.assert_called_once()
 
     @patch('src.discord_notifier.requests.post')
-    def test_send_scan_report_success(self, mock_post, notifier, sample_scan_results):
-        """Test send_scan_report successfully sends message."""
+    def test_send_message_with_csv(self, mock_post, notifier):
+        """Test successful message sending with CSV attachment."""
+        mock_response = Mock()
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        csv_content = "Image,CVE,Severity,Fixed\ntest:latest,CVE-2023-1234,CRITICAL,1.0.1"
+        notifier._send_message("Test message", csv_file=csv_content)
+
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        assert call_args.kwargs["data"] == {"content": "Test message"}
+        assert "file" in call_args.kwargs["files"]
+        assert call_args.kwargs["files"]["file"][0] == "vulnerabilities.csv"
+        assert call_args.kwargs["files"]["file"][1] == csv_content
+        assert call_args.kwargs["files"]["file"][2] == "text/csv"
+        mock_response.raise_for_status.assert_called_once()
+
+    @patch('src.discord_notifier.time.sleep')
+    @patch('src.discord_notifier.requests.post')
+    def test_send_scan_report_success(self, mock_post, mock_sleep, notifier, sample_scan_results):
+        """Test send_scan_report successfully sends message(s) with CSV attachment."""
         # Mock HTTP response
         mock_response = Mock()
         mock_response.raise_for_status = Mock()
@@ -153,8 +173,18 @@ class TestDiscordNotifier:
         )
 
         assert result is True
-        # Should send at least summary message + tables for critical and high
-        assert mock_post.call_count >= 3
+        # Should send at least one message
+        assert mock_post.call_count >= 1
+        # First message should have CSV attachment
+        first_call = mock_post.call_args_list[0]
+        assert "files" in first_call.kwargs
+        assert "file" in first_call.kwargs["files"]
+        # Verify the first message content includes summary
+        assert "Security Scan Complete" in first_call.kwargs["data"]["content"]
+        assert "2 images" in first_call.kwargs["data"]["content"]
+        # If multiple messages sent, verify rate limiting was used
+        if mock_post.call_count > 1:
+            assert mock_sleep.call_count == mock_post.call_count - 1
 
     @patch('src.discord_notifier.requests.post')
     def test_send_scan_report_handles_error(self, mock_post, notifier, sample_scan_results):
@@ -171,31 +201,6 @@ class TestDiscordNotifier:
 
         assert result is False
 
-    @patch('src.discord_notifier.time.sleep')
-    @patch('src.discord_notifier.requests.post')
-    def test_send_scan_report_uses_rate_limiting(
-        self, mock_post, mock_sleep, notifier, sample_scan_results
-    ):
-        """Test that send_scan_report uses rate limiting between messages."""
-        mock_response = Mock()
-        mock_response.raise_for_status = Mock()
-        mock_post.return_value = mock_response
-
-        result = notifier.send_scan_report(
-            scan_results=sample_scan_results,
-            total_critical=1,
-            total_high=1,
-            duration=10.5,
-            total_images=2,
-        )
-
-        assert result is True
-        # Should send multiple messages (summary + tables)
-        assert mock_post.call_count >= 3
-        # Should have rate limiting delays between messages
-        assert mock_sleep.called
-        # Number of delays should be one less than number of messages
-        assert mock_sleep.call_count == mock_post.call_count - 1
 
     def test_extracts_short_image_names(self, notifier):
         """Test that image names are shortened (registry removed)."""
@@ -219,3 +224,78 @@ class TestDiscordNotifier:
         # Should show shortened name, not full path
         assert "myapp:v1.0.0" in table_messages[0]
         assert "iad.ocir.io" not in table_messages[0]
+
+    def test_build_vulnerability_table_only_with_fixes(self, notifier):
+        """Test that only_with_fixes filter works correctly."""
+        results = [
+            {
+                "image": "test:latest",
+                "cves": {
+                    "CVE-2023-0001": {
+                        "severity": "CRITICAL",
+                        "title": "Has fix",
+                        "package": "pkg1",
+                        "installed": "1.0.0",
+                        "fixed": "1.0.1",
+                    },
+                    "CVE-2023-0002": {
+                        "severity": "CRITICAL",
+                        "title": "No fix",
+                        "package": "pkg2",
+                        "installed": "2.0.0",
+                        "fixed": "",
+                    },
+                },
+            }
+        ]
+
+        table_messages = notifier._build_vulnerability_table(results, "CRITICAL", only_with_fixes=True)
+        # Should only include CVE with fix
+        assert "CVE-2023-0001" in table_messages[0]
+        assert "CVE-2023-0002" not in table_messages[0]
+
+    def test_generate_csv(self, notifier, sample_scan_results):
+        """Test CSV generation includes all vulnerabilities."""
+        csv_data = notifier._generate_csv(sample_scan_results)
+
+        # Verify CSV header
+        assert "Image,CVE,Severity,Fixed Version" in csv_data
+        # Verify critical vulnerabilities are included
+        assert "CVE-2023-1234" in csv_data
+        assert "CRITICAL" in csv_data
+        # Verify high vulnerabilities are included
+        assert "CVE-2023-5678" in csv_data
+        assert "HIGH" in csv_data
+        # Verify images are included
+        assert "iad.ocir.io/namespace/app1:latest" in csv_data
+        assert "iad.ocir.io/namespace/app2:v1.0" in csv_data
+
+    def test_generate_csv_sorted_by_severity(self, notifier):
+        """Test that CSV rows are sorted by severity."""
+        results = [
+            {
+                "image": "test:latest",
+                "cves": {
+                    "CVE-2023-0001": {
+                        "severity": "HIGH",
+                        "fixed": "1.0.1",
+                    },
+                    "CVE-2023-0002": {
+                        "severity": "CRITICAL",
+                        "fixed": "2.0.1",
+                    },
+                    "CVE-2023-0003": {
+                        "severity": "MEDIUM",
+                        "fixed": "",
+                    },
+                },
+            }
+        ]
+
+        csv_data = notifier._generate_csv(results)
+        lines = csv_data.strip().split("\n")
+
+        # Skip header, check order: CRITICAL, HIGH, MEDIUM
+        assert "CRITICAL" in lines[1]
+        assert "HIGH" in lines[2]
+        assert "MEDIUM" in lines[3]
