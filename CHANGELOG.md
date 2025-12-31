@@ -5,6 +5,54 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] - 2025-12-31
+
+### Added
+- **Image version update detection across multiple registries**
+  - Automatically checks for newer versions of deployed images
+  - Supports semver tags (v1.2.3, 1.2.3) with proper version comparison
+  - Supports commit hash tags compared by image creation date
+  - Multi-registry support: OCIR, Docker Hub, GitHub Container Registry
+  - Categorizes updates as MAJOR (breaking changes) vs minor/patch (safe updates)
+- New `src/registry_client.py` module for registry API interactions
+  - Fetches available tags from registry APIs
+  - Retrieves image manifests and creation dates
+  - Parses and compares semver and commit hash versions
+  - Supports authenticated OCIR access and public Docker Hub/ghcr.io access
+- New `src/version_reporter.py` module for version update reporting
+  - Generates formatted console reports with MAJOR and minor/patch sections
+  - Shows version differences and image age for outdated deployments
+- **Enhanced Discord notifications with two-message block system**
+  - Block 1: Vulnerability scan results (summary + CRITICAL CVEs table + CSV)
+  - Block 2: Version update results (summary + minor/patch updates table)
+  - MAJOR updates excluded from Discord message (available in CSV only)
+  - Version updates shown with type indicators (MAJOR/Minor/Patch/Commit Hash)
+- **Comprehensive CSV reporting with two sections**
+  - Section 1: Vulnerabilities (Image, CVE, Severity, Fixed Version)
+  - Section 2: Version Updates (Image, Current Version, Latest Version, Update Type, Age, Version Diff)
+  - Both sections included in single CSV attachment for complete audit trail
+
+### Changed
+- Updated Discord notification format to use two separate message blocks
+  - First block focuses on security vulnerabilities
+  - Second block focuses on version updates
+  - Improved clarity and reduced information overload
+- Enhanced `send_scan_report()` to accept `update_results` parameter
+- Added `_build_update_table()` method for formatting version update tables
+- Updated `_generate_csv()` to include version update data in separate section
+- Updated main scan workflow to include version checking step
+- Updated architecture diagram to show version checking as step 4
+
+### Documentation
+- Updated README.md with version tracking features and multi-registry support
+- Added version update example outputs to Discord notifications section
+- Updated AGENTS.md with complete registry_client.py and version_reporter.py documentation
+- Added "Version Update Checking Implementation Details" section to AGENTS.md
+  - Registry API patterns and authentication methods
+  - Version comparison logic for semver and commit hash tags
+  - Performance considerations and optimization strategies
+  - Error handling scenarios
+
 ## [0.0.4] - 2025-12-30
 
 ### Changed

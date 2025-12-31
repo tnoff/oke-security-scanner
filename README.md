@@ -6,37 +6,43 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 
 - 🔍 **Automatic Discovery** - Queries Kubernetes API to find all deployed images
 - 🛡️ **Trivy Scanner** - Industry-standard vulnerability scanner with daily DB updates
+- 🔄 **Version Update Detection** - Identifies outdated images (semver & commit hash) across multiple registries
 - 📊 **OTLP Observability** - Sends logs, traces, and metrics to your LGTM stack
-- 🔐 **OCIR Integration** - Authenticates with Oracle Container Image Registry
+- 🔐 **Multi-Registry Support** - Works with OCIR, Docker Hub, and GitHub Container Registry
 - 🎯 **Namespace Filtering** - Scan specific namespaces or exclude system namespaces
 
 ## Architecture
 
 ```
-┌─────────────────────────────────┐
-│   Kubernetes CronJob            │
-│   ┌─────────────────────────┐   │
-│   │  Security Scanner       │   │
-│   │  ┌──────────────────┐   │   │
-│   │  │ 1. Update Trivy  │   │   │
-│   │  │    DB (latest)   │   │   │
-│   │  └──────────────────┘   │   │
-│   │  ┌──────────────────┐   │   │
-│   │  │ 2. Query K8s API │   │   │
-│   │  │    (get images)  │   │   │
-│   │  └──────────────────┘   │   │
-│   │  ┌──────────────────┐   │   │
-│   │  │ 3. Pull & Scan   │   │   │
-│   │  │    (Trivy)       │   │   │
-│   │  └──────────────────┘   │   │
-│   │  ┌──────────────────┐   │   │
-│   │  │ 4. Send OTLP     │   │   │
-│   │  │    - Logs (Loki) │   │   │
-│   │  │    - Traces      │   │   │
-│   │  │    - Metrics     │   │   │
-│   │  └──────────────────┘   │   │
-│   └─────────────────────────┘   │
-└─────────────────────────────────┘
+┌──────────────────────────────────────┐
+│   Kubernetes CronJob                 │
+│   ┌──────────────────────────────┐   │
+│   │  Security Scanner            │   │
+│   │  ┌───────────────────────┐   │   │
+│   │  │ 1. Update Trivy DB    │   │   │
+│   │  │    (latest CVEs)      │   │   │
+│   │  └───────────────────────┘   │   │
+│   │  ┌───────────────────────┐   │   │
+│   │  │ 2. Query K8s API      │   │   │
+│   │  │    (discover images)  │   │   │
+│   │  └───────────────────────┘   │   │
+│   │  ┌───────────────────────┐   │   │
+│   │  │ 3. Scan Vulnerabilities│  │   │
+│   │  │    (Trivy)            │   │   │
+│   │  └───────────────────────┘   │   │
+│   │  ┌───────────────────────┐   │   │
+│   │  │ 4. Check for Updates  │   │   │
+│   │  │    - Query registries │   │   │
+│   │  │    - Compare versions │   │   │
+│   │  └───────────────────────┘   │   │
+│   │  ┌───────────────────────┐   │   │
+│   │  │ 5. Send OTLP          │   │   │
+│   │  │    - Logs (Loki)      │   │   │
+│   │  │    - Traces (Tempo)   │   │   │
+│   │  │    - Metrics (Mimir)  │   │   │
+│   │  └───────────────────────┘   │   │
+│   └──────────────────────────────┘   │
+└──────────────────────────────────────┘
 ```
 
 ## Prerequisites
@@ -180,16 +186,29 @@ Create dashboards showing:
 
 ## Discord Notifications
 
-The scanner can send scan result notifications to Discord via webhooks. This is optional and enabled when `DISCORD_WEBHOOK_URL` is configured.
+The scanner sends comprehensive scan results to Discord via webhooks in **two message blocks**. This is optional and enabled when `DISCORD_WEBHOOK_URL` is configured.
+
+### Message Block 1: Vulnerability Scan Results
+
+- **Summary**: Scan duration, image count, vulnerability counts
+- **Critical Vulnerabilities Table**: Shows CRITICAL CVEs with available fixes
+- **CSV Attachment**: Complete vulnerability and version update report
+
+### Message Block 2: Version Update Results
+
+- **Update Summary**: Counts of minor/patch and major updates available
+- **Minor/Patch Updates Table**: Non-breaking updates for easy deployment
+- **Note**: MAJOR updates excluded from message (see CSV for full report)
 
 ### Features
 
-- Concise scan summary with vulnerability counts
-- Critical vulnerabilities **with available fixes** displayed in the channel for immediate action
-- Full vulnerability report attached as downloadable CSV file
-- CSV includes all vulnerabilities (CRITICAL, HIGH, etc.) sorted by severity
-- Scan duration and image count summary
-- Single message format (no pagination spam)
+- Two separate message blocks for clarity (vulnerabilities, then updates)
+- Critical vulnerabilities **with available fixes** displayed for immediate action
+- Version updates categorized as MAJOR, Minor, Patch, or Commit Hash
+- CSV includes **both** vulnerabilities and version updates in separate sections
+- Semver parsing for proper version comparison (v1.2.3 format)
+- Commit hash comparison by image creation date
+- Multi-registry support (OCIR, Docker Hub, GitHub Container Registry)
 - Non-blocking: webhook failures don't affect scan execution
 
 ### Setup
@@ -207,6 +226,37 @@ The scanner can send scan result notifications to Discord via webhooks. This is 
    ```
 
 3. The scanner will automatically send notifications after each scan completes
+
+### Example Output
+
+**Message Block 1 - Vulnerabilities:**
+```
+Security Scan Complete
+Scanned: 25 images in 142.3s
+Critical: 3 | High: 12
+
+CRITICAL Vulnerabilities:
+```Image                         || CVE                 || Fixed
+-------------------------------------------------------------
+discord-bot:v1.0.0            || CVE-2023-1234       || 1.2.3```
+```
+
+**Message Block 2 - Version Updates:**
+```
+Image Version Updates
+Minor/Patch: 5 | Major: 2
+(Major updates excluded below, see CSV for full report)
+
+Minor/Patch Updates Available:
+```Image                         || Current        || Latest         || Type
+-------------------------------------------------------------------------
+discord-bot:v1.0.0            || 1.0.0          || 1.2.0          || minor
+backup-tool:abc123            || abc123         || def456         || newer```
+```
+
+**CSV Sections:**
+- **Vulnerabilities**: All CVEs with severity and fix information
+- **Version Updates**: All updates (MAJOR + minor/patch) with age and version diff
 
 ## Development
 
