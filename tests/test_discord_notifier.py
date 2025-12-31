@@ -295,7 +295,10 @@ class TestDiscordNotifier:
         csv_data = notifier._generate_csv(results)
         lines = csv_data.strip().split("\n")
 
-        # Skip header, check order: CRITICAL, HIGH, MEDIUM
-        assert "CRITICAL" in lines[1]
-        assert "HIGH" in lines[2]
-        assert "MEDIUM" in lines[3]
+        # Skip section header and column header, check order: CRITICAL, HIGH, MEDIUM
+        # Line 0: "=== VULNERABILITIES ==="
+        # Line 1: "Image,CVE,Severity,Fixed Version"
+        # Line 2+: Data rows
+        assert "CRITICAL" in lines[2]
+        assert "HIGH" in lines[3]
+        assert "MEDIUM" in lines[4]

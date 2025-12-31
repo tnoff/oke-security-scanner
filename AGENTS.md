@@ -11,7 +11,9 @@ This document provides context for AI agents (Claude, GPT, etc.) working on this
 2. Queries Kubernetes API to discover all deployed container images
 3. Pulls images from Oracle Container Image Registry (OCIR) using provided credentials
 4. Scans images with Trivy for vulnerabilities
-5. Exports observability data (logs, traces, metrics) via OpenTelemetry Protocol (OTLP)
+5. Checks for image version updates across multiple registries (OCIR, Docker Hub, GitHub Container Registry)
+6. Exports observability data (logs, traces, metrics) via OpenTelemetry Protocol (OTLP)
+7. Sends Discord notifications with vulnerability and version update reports
 
 **Target Environment:**
 - Oracle Kubernetes Engine (OKE)
@@ -96,11 +98,13 @@ metrics["scan_total"].set(
 oke-security-scanner/
 ├── src/
 │   ├── __init__.py
-│   ├── main.py           # Entry point, orchestrates scanning workflow
-│   ├── config.py         # Environment variable configuration
-│   ├── telemetry.py      # OpenTelemetry setup (traces, metrics, logs)
-│   ├── k8s_client.py     # Kubernetes API client for image discovery
-│   ├── scanner.py        # Trivy scanner wrapper
+│   ├── main.py              # Entry point, orchestrates scanning workflow
+│   ├── config.py            # Environment variable configuration
+│   ├── telemetry.py         # OpenTelemetry setup (traces, metrics, logs)
+│   ├── k8s_client.py        # Kubernetes API client for image discovery
+│   ├── scanner.py           # Trivy scanner wrapper
+│   ├── registry_client.py   # Multi-registry client for version checking
+│   ├── version_reporter.py  # Version update report generation
 │   └── discord_notifier.py  # Discord webhook notifications
 ├── k8s/                  # Kubernetes manifests (EXAMPLES - customize before use)
 │   ├── rbac.yaml         # ServiceAccount, ClusterRole, ClusterRoleBinding
@@ -138,8 +142,11 @@ oke-security-scanner/
 3. Initialize scanner and Kubernetes client (passing logger_provider)
 4. Update Trivy database
 5. Discover images from cluster
-6. Scan each image
-7. Exit with code 1 if critical vulnerabilities found, 0 otherwise
+6. Scan each image for vulnerabilities
+7. Check for version updates across registries
+8. Generate version update report
+9. Send Discord notifications (if configured)
+10. Exit with code 1 if critical vulnerabilities found, 0 otherwise
 
 **Root span:** `security-scan` wraps entire operation
 
@@ -190,24 +197,87 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 
 **Validation:** The `validate()` method checks required fields are present.
 
-### src/discord_notifier.py
-**Purpose:** Send scan result notifications to Discord webhooks
+### src/registry_client.py
+**Purpose:** Multi-registry client for checking image version updates
 
 **Key methods:**
-- `send_scan_report(scan_results, total_critical, total_high, duration, total_images)` - Sends formatted scan report with CSV attachment
-- `_build_vulnerability_table(results, severity, only_with_fixes)` - Creates formatted table for specific severity level, optionally filtering for fixes only
-- `_generate_csv(results)` - Generates CSV data with all vulnerabilities sorted by severity
+- `check_for_updates(image)` - Checks if newer version exists for given image
+- `get_image_tags(registry, repository)` - Fetches all tags from registry API
+- `get_image_creation_date(registry, repository, tag)` - Gets image creation date from manifest
+- `parse_image_name(image)` - Parses image into registry, repository, and tag components
+- `parse_version(tag)` - Parses semver or commit hash tags
+- `get_latest_version(registry, repository, tags)` - Determines latest available version
+
+**Supported registries:**
+- **OCIR**: Oracle Container Image Registry (authenticated with OCI credentials)
+- **Docker Hub**: Public registry using Docker Hub API v2
+- **GitHub Container Registry (ghcr.io)**: Public images via standard Docker v2 API
+
+**Version comparison strategies:**
+- **Semver tags** (v1.2.3, 1.2.3): Parsed and compared by major.minor.patch
+- **Commit hash tags** (abc123): Compared by image creation date from manifest
+- **Major update detection**: Flags when major version increases (breaking changes expected)
+
+**Spans:** `check-for-updates`, `get-image-tags`, `get-image-manifest`
+
+**Authentication:**
+- OCIR: Uses `OCI_USERNAME` and `OCI_TOKEN` with Basic auth
+- Docker Hub: Fetches bearer token from auth.docker.io
+- GitHub Container Registry: Public access (no auth required)
+
+### src/version_reporter.py
+**Purpose:** Generate formatted reports for image version updates
+
+**Key methods:**
+- `generate_report(update_results)` - Creates formatted console report with MAJOR and minor/patch sections
+- `log_summary(update_results)` - Logs summary of update check results
+- `_format_update_entry(result)` - Formats individual update entry with version diff
+
+**Report structure:**
+- **MAJOR VERSION UPDATES**: Breaking changes expected (sorted by image)
+- **Minor/Patch Version Updates**: Non-breaking updates (sorted by image)
+- Shows current vs latest version, version differences, and age for commit hashes
+
+### src/discord_notifier.py
+**Purpose:** Send scan result notifications to Discord webhooks in two message blocks
+
+**Key methods:**
+- `send_scan_report(scan_results, total_critical, total_high, duration, total_images, update_results)` - Sends two-block notification with CSV
+- `_build_vulnerability_table(results, severity, only_with_fixes)` - Creates formatted table for specific severity level
+- `_build_update_table(update_results, only_minor_patch)` - Creates formatted table for version updates
+- `_generate_csv(results, update_results)` - Generates CSV with both vulnerabilities and version updates
 - `_send_message(content, csv_file)` - Sends message via webhook with optional file attachment
 
+**Message flow:**
+1. **Block 1 - Vulnerability Results:**
+   - Message 1: Summary with CSV attachment (vulnerabilities + version updates)
+   - Message 2: CRITICAL vulnerabilities table (fixes only)
+2. **Block 2 - Version Update Results:**
+   - Message 3: Update summary (minor/patch and major counts)
+   - Message 4: Minor/Patch updates table (MAJOR updates excluded)
+
 **Features:**
-- Optional integration enabled via `DISCORD_WEBHOOK_URL` environment variable
-- Displays scan summary and critical vulnerabilities **with fixes** in the channel message
-- Attaches comprehensive CSV file with all vulnerabilities (CRITICAL, HIGH, MEDIUM, LOW)
-- CSV sorted by severity for easy prioritization
-- Single message format (no pagination) to reduce Discord channel spam
-- Uses multipart/form-data for file uploads
-- Non-blocking: failures logged but don't affect scan execution
+- Two separate message blocks for clarity (vulnerabilities, then version updates)
+- Critical vulnerabilities **with fixes** displayed for immediate action
+- Version updates categorized as MAJOR, Minor, Patch, or Commit Hash
+- CSV includes **both** vulnerabilities and version updates in separate sections
+- Semver parsing for proper version comparison (v1.2.3 format)
+- Commit hash comparison by image creation date
+- Multi-registry support (OCIR, Docker Hub, GitHub Container Registry)
+- 1-second delays between messages to avoid rate limiting
 - Uses DapperTable library with custom headers for professional formatting
+- Non-blocking: failures logged but don't affect scan execution
+
+**CSV structure:**
+```csv
+=== VULNERABILITIES ===
+Image,CVE,Severity,Fixed Version
+...
+
+=== VERSION UPDATES ===
+Image,Current Version,Latest Version,Update Type,Age (days),Version Diff
+...
+```
 
 **Dependencies:**
 - `requests` - HTTP library for webhook calls
@@ -398,9 +468,11 @@ kubectl logs -f job/manual-scan-<timestamp>
 **Python packages (requirements.txt):**
 - `kubernetes` - Kubernetes API client
 - `opentelemetry-*` - OTLP SDK, exporters, instrumentation
-- `requests` - HTTP library for Discord webhook calls
+- `requests` - HTTP library for Discord webhook calls and registry API queries
 - `dappertable` - Table formatting for Discord notifications
 - System dependencies: Trivy binary (installed in Dockerfile)
+
+**Note:** No additional dependencies required for version checking - uses built-in `requests` library for registry API calls
 
 **External services:**
 - OCIR for image storage
@@ -470,12 +542,80 @@ This project shares OCIR credentials and patterns with the `github-workflows` re
 **Resolution:** Added `logger_provider` argument to KubernetesClient instantiation in main.py
 **Files affected:** src/main.py
 
+## Version Update Checking Implementation Details
+
+### Registry API Patterns
+
+**OCIR (Oracle Container Image Registry):**
+- Uses Docker Registry HTTP API V2
+- Requires Basic authentication with `${OCI_NAMESPACE}/${OCI_USERNAME}:${OCI_TOKEN}`
+- Tag list: `GET https://{registry}/v2/{repository}/tags/list`
+- Manifest: `GET https://{registry}/v2/{repository}/manifests/{tag}`
+- Blob (for creation date): `GET https://{registry}/v2/{repository}/blobs/{digest}`
+
+**Docker Hub:**
+- Tag list uses Hub API v2: `GET https://hub.docker.com/v2/repositories/{repository}/tags`
+- Manifest uses Registry v1: `GET https://registry-1.docker.io/v2/{repository}/manifests/{tag}`
+- Requires bearer token from `https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repository}:pull`
+
+**GitHub Container Registry:**
+- Uses standard Docker Registry HTTP API V2 (public access)
+- Tag list: `GET https://ghcr.io/v2/{repository}/tags/list`
+- Manifest: `GET https://ghcr.io/v2/{repository}/manifests/{tag}`
+
+### Version Comparison Logic
+
+**Semver tags (v1.2.3, 1.2.3):**
+- Parsed with regex: `^v?(\d+)\.(\d+)\.(\d+).*$`
+- Compared by (major, minor, patch) tuple
+- Major update: `latest.major > current.major`
+
+**Commit hash tags (abc123, def456):**
+- Fetches image manifest to get config digest
+- Fetches config blob to get `created` timestamp
+- Compares by creation date (ISO 8601 format)
+- Newer image = update available
+
+**Mixed environments:**
+- If repository has semver tags, prioritizes those for "latest" determination
+- Falls back to creation date comparison for non-semver tags
+- Doesn't compare semver with commit hash (incompatible)
+
+### Performance Considerations
+
+**API calls per image:**
+- 1 call: Get tags list
+- N calls: Get creation date for each non-semver tag (where N = number of non-semver tags)
+- Result: Can be slow for images with many commit hash tags
+
+**Optimization strategies:**
+- Uses requests session for connection pooling
+- 10-second timeout per API call
+- Failures are logged but don't block scan
+- Semver-only images are fastest (no manifest fetching required)
+
+### Error Handling
+
+**Registry unavailable:**
+- Logs warning and continues to next image
+- Returns `None` for update check (skipped)
+
+**Rate limiting:**
+- Not currently handled (relies on reasonable scan frequency)
+- 1-second delays between Discord messages only
+
+**Unsupported registries:**
+- Logs warning for unrecognized registry hostnames
+- Skips update check for those images
+
 ## Future Considerations
 
 Potential enhancements (not yet implemented):
-- Support for private registries beyond OCIR
+- Support for additional private registries (Harbor, Artifactory, etc.)
 - Configurable actions on vulnerability findings (webhooks, tickets)
-- Historical trend analysis
+- Historical trend analysis for versions and vulnerabilities
 - Multi-cluster support
 - Automated remediation suggestions
 - Integration with admission controllers for prevention
+- Caching of registry API responses to reduce API calls
+- Parallel version checking for improved performance

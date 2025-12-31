@@ -13,6 +13,8 @@ from .telemetry import setup_telemetry, create_metrics
 from .k8s_client import KubernetesClient
 from .scanner import TrivyScanner
 from .discord_notifier import DiscordNotifier
+from .registry_client import RegistryClient
+from .version_reporter import VersionReporter
 
 
 logger = getLogger(__name__)
@@ -112,6 +114,33 @@ def main():
                     failed_scans += 1
                     logger.error("  └─ ✗ Scan failed")
 
+            # Check for version updates
+            logger.info("-" * 60)
+            logger.info("Checking for image version updates...")
+            logger.info("-" * 60)
+
+            registry_client = RegistryClient(config)
+            update_results = []
+
+            for idx, image in enumerate(sorted(images), 1):
+                logger.debug(f"[{idx}/{len(images)}] Checking updates for: {image}")
+                update_info = registry_client.check_for_updates(image)
+
+                if update_info:
+                    update_results.append({
+                        "image": image,
+                        "update_info": update_info,
+                    })
+                    logger.info(f"  └─ Update available: {image}")
+
+            # Generate and display version update report
+            if update_results:
+                report = VersionReporter.generate_report(update_results)
+                print(report)
+                VersionReporter.log_summary(update_results)
+            else:
+                logger.info("✓ All images are up to date")
+
             # Calculate total duration
             total_duration = time.time() - start_time
 
@@ -125,6 +154,7 @@ def main():
             logger.info(f"  Failed scans:          {failed_scans}")
             logger.info(f"  CRITICAL vulns found:  {total_critical}")
             logger.info(f"  HIGH vulns found:      {total_high}")
+            logger.info(f"  Updates available:     {len(update_results)}")
             logger.info("=" * 60)
 
             # Set root span attributes
@@ -155,6 +185,7 @@ def main():
                         total_high=total_high,
                         duration=total_duration,
                         total_images=len(images),
+                        update_results=update_results,
                     )
                     logger.info("✓ Discord notification sent")
                 except Exception as e:

@@ -30,6 +30,7 @@ class DiscordNotifier:
         total_high: int,
         duration: float,
         total_images: int,
+        update_results: list[dict] | None = None,
     ) -> bool:
         """Send formatted scan results to Discord.
 
@@ -39,13 +40,29 @@ class DiscordNotifier:
             total_high: Total count of high vulnerabilities
             duration: Scan duration in seconds
             total_images: Total number of images scanned
+            update_results: Optional list of image update results
 
         Returns:
             True if all messages sent successfully, False otherwise
         """
         try:
-            # Build summary message
-            summary = (
+            # Count version updates
+            minor_patch_count = 0
+            major_count = 0
+            if update_results:
+                for result in update_results:
+                    update_info = result.get("update_info")
+                    if update_info:
+                        if update_info["is_major_update"]:
+                            major_count += 1
+                        else:
+                            minor_patch_count += 1
+
+            # Generate CSV with all vulnerabilities and version updates
+            csv_data = self._generate_csv(scan_results, update_results)
+
+            # === MESSAGE BLOCK 1: Vulnerability Scan Results ===
+            vuln_summary = (
                 f"Security Scan Complete\n"
                 f"Scanned: {total_images} images in {duration:.1f}s\n"
                 f"Critical: {total_critical} | High: {total_high}"
@@ -56,30 +73,59 @@ class DiscordNotifier:
                 scan_results, "CRITICAL", only_with_fixes=True
             )
 
-            # Combine summary and critical-with-fixes table (may be paginated)
-            messages = [summary]
+            # Combine vulnerability summary and critical table (may be paginated)
+            vuln_messages = [vuln_summary]
             if critical_with_fixes_table:
-                messages.extend(critical_with_fixes_table)
+                vuln_messages.extend(critical_with_fixes_table)
 
-            # Generate CSV with all vulnerabilities
-            csv_data = self._generate_csv(scan_results)
-
-            # Send messages with CSV attached to first message only
-            for idx, message in enumerate(messages):
+            # Send vulnerability messages with CSV attached to first message only
+            for idx, message in enumerate(vuln_messages):
                 is_first = idx == 0
                 csv_file = csv_data if is_first else None
 
                 logger.debug(
-                    f"Sending Discord message {idx + 1}/{len(messages)} "
+                    f"Sending vulnerability message {idx + 1}/{len(vuln_messages)} "
                     f"({len(message)} chars{', with CSV' if is_first else ''})"
                 )
                 self._send_message(message, csv_file=csv_file)
 
-                # Add delay between messages to avoid rate limiting (except after last message)
-                if idx < len(messages) - 1:
+                # Add delay between messages to avoid rate limiting
+                if idx < len(vuln_messages) - 1:
                     time.sleep(1)
 
-            logger.info(f"Successfully sent {len(messages)} Discord message(s) with CSV attachment")
+            # === MESSAGE BLOCK 2: Version Update Results ===
+            if update_results and (minor_patch_count > 0 or major_count > 0):
+                # Add delay before sending update block
+                time.sleep(1)
+
+                update_summary = (
+                    f"Image Version Updates\n"
+                    f"Minor/Patch: {minor_patch_count} | Major: {major_count}\n"
+                    f"(Major updates excluded below, see CSV for full report)"
+                )
+
+                # Build table for Minor/Patch version updates only
+                update_table = self._build_update_table(update_results, only_minor_patch=True)
+
+                # Combine update summary and table (may be paginated)
+                update_messages = [update_summary]
+                if update_table:
+                    update_messages.extend(update_table)
+
+                # Send update messages
+                for idx, message in enumerate(update_messages):
+                    logger.debug(
+                        f"Sending update message {idx + 1}/{len(update_messages)} "
+                        f"({len(message)} chars)"
+                    )
+                    self._send_message(message)
+
+                    # Add delay between messages to avoid rate limiting
+                    if idx < len(update_messages) - 1:
+                        time.sleep(1)
+
+            total_messages = len(vuln_messages) + (len(update_messages) if update_results else 0)
+            logger.info(f"Successfully sent {total_messages} Discord message(s) with CSV attachment")
             return True
 
         except Exception as e:
@@ -148,11 +194,97 @@ class DiscordNotifier:
             return [messages]
         return messages
 
-    def _generate_csv(self, results: list[dict]) -> str:
-        """Generate CSV data for all vulnerabilities.
+    def _build_update_table(
+        self, update_results: list[dict] | None, only_minor_patch: bool = False
+    ) -> list[str]:
+        """Build a table of version updates.
+
+        Args:
+            update_results: List of update result dictionaries
+            only_minor_patch: If True, only include minor/patch updates
+
+        Returns:
+            List of message strings (paginated if needed)
+        """
+        if not update_results:
+            return []
+
+        # Define table headers with column widths
+        headers = DapperTableHeaderOptions([
+            DapperTableHeader("Image", 30),
+            DapperTableHeader("Current", 15),
+            DapperTableHeader("Latest", 15),
+            DapperTableHeader("Type", 10),
+        ])
+
+        # Create table with headers and pagination
+        table = DapperTable(
+            header_options=headers,
+            pagination_options=PaginationLength(self.max_length),
+            prefix="Minor/Patch Updates Available:\n",
+            enclosure_start="```",
+            enclosure_end="```",
+        )
+
+        # Collect update rows
+        rows = []
+        for result in update_results:
+            image = result.get("image", "unknown")
+            update_info = result.get("update_info")
+
+            if not update_info:
+                continue
+
+            # Skip major updates if only showing minor/patch
+            if only_minor_patch and update_info["is_major_update"]:
+                continue
+
+            # Extract short image name
+            short_name = image.split("/")[-1] if "/" in image else image
+
+            current = update_info["current"]
+            latest = update_info["latest"]
+
+            # Determine update type
+            if current.is_semver and latest.is_semver:
+                if update_info["major_diff"] > 0:
+                    update_type = "MAJOR"
+                elif update_info["minor_diff"] > 0:
+                    update_type = "minor"
+                else:
+                    update_type = "patch"
+            else:
+                update_type = "newer"
+
+            rows.append([
+                short_name,
+                current.to_string()[:15],
+                latest.to_string()[:15],
+                update_type
+            ])
+
+        # Sort rows by image name
+        rows.sort(key=lambda x: x[0])
+
+        # Add rows to table
+        for row in rows:
+            table.add_row(row)
+
+        # Return paginated messages
+        if not rows:
+            return []
+
+        messages = table.print()
+        if isinstance(messages, str):
+            return [messages]
+        return messages
+
+    def _generate_csv(self, results: list[dict], update_results: list[dict] | None = None) -> str:
+        """Generate CSV data for all vulnerabilities and version updates.
 
         Args:
             results: List of scan result dictionaries
+            update_results: Optional list of update result dictionaries
 
         Returns:
             CSV data as a string
@@ -160,7 +292,8 @@ class DiscordNotifier:
         output = StringIO()
         writer = csv.writer(output)
 
-        # Write header
+        # Section 1: Vulnerabilities
+        writer.writerow(["=== VULNERABILITIES ==="])
         writer.writerow(["Image", "CVE", "Severity", "Fixed Version"])
 
         # Collect all vulnerabilities
@@ -178,9 +311,64 @@ class DiscordNotifier:
         severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
         rows.sort(key=lambda x: (severity_order.get(x[2], 99), x[0], x[1]))
 
-        # Write rows
+        # Write vulnerability rows
         for row in rows:
             writer.writerow(row)
+
+        # Section 2: Version Updates
+        if update_results:
+            writer.writerow([])  # Blank row separator
+            writer.writerow(["=== VERSION UPDATES ==="])
+            writer.writerow(["Image", "Current Version", "Latest Version", "Update Type", "Age (days)", "Version Diff"])
+
+            update_rows = []
+            for result in update_results:
+                image = result.get("image", "unknown")
+                update_info = result.get("update_info")
+
+                if not update_info:
+                    continue
+
+                current = update_info["current"]
+                latest = update_info["latest"]
+
+                # Determine update type and diff
+                if current.is_semver and latest.is_semver:
+                    if update_info["is_major_update"]:
+                        update_type = "MAJOR"
+                    elif update_info["minor_diff"] > 0:
+                        update_type = "Minor"
+                    else:
+                        update_type = "Patch"
+
+                    version_diff = f"+{update_info['major_diff']}.{update_info['minor_diff']}.{update_info['patch_diff']}"
+                else:
+                    update_type = "Commit Hash"
+                    version_diff = "N/A"
+
+                # Get age information
+                current_age = current.age_days() if current.created_at else "N/A"
+                if current_age != "N/A":
+                    age_str = str(current_age)
+                else:
+                    age_str = "N/A"
+
+                update_rows.append([
+                    image,
+                    current.to_string(),
+                    latest.to_string(),
+                    update_type,
+                    age_str,
+                    version_diff
+                ])
+
+            # Sort by update type (MAJOR first), then image
+            type_order = {"MAJOR": 0, "Minor": 1, "Patch": 2, "Commit Hash": 3}
+            update_rows.sort(key=lambda x: (type_order.get(x[3], 99), x[0]))
+
+            # Write update rows
+            for row in update_rows:
+                writer.writerow(row)
 
         return output.getvalue()
 
