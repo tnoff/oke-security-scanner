@@ -5,6 +5,26 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2025-12-30
+
+### Changed
+- **Discord webhook notifications now use CSV file attachments**
+  - Sends a single message instead of multiple paginated messages to reduce channel spam
+  - Critical vulnerabilities **with available fixes** are displayed in the channel for immediate visibility
+  - Full vulnerability report attached as downloadable CSV file
+  - CSV includes all vulnerabilities (CRITICAL, HIGH, MEDIUM, LOW) sorted by severity
+  - CSV format: Image, CVE, Severity, Fixed Version
+- Enhanced `_build_vulnerability_table()` with `only_with_fixes` parameter to filter vulnerabilities
+- Updated `_send_message()` to support multipart/form-data file uploads
+
+### Added
+- New `_generate_csv()` method in `DiscordNotifier` for comprehensive vulnerability reporting
+- CSV attachment support via Discord webhook file uploads
+- Improved test coverage for Discord notifications:
+  - Test for CSV file attachment functionality
+  - Test for `only_with_fixes` filter behavior
+  - Test for CSV generation and severity-based sorting
+
 ## [0.0.3] - 2025-12-26
 
 ### Added

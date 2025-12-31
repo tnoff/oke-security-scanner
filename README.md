@@ -184,10 +184,12 @@ The scanner can send scan result notifications to Discord via webhooks. This is 
 
 ### Features
 
-- Formatted scan reports with vulnerability counts
-- Paginated table showing top 10 most vulnerable images
-- Color-coded severity indicators (CRITICAL and HIGH)
+- Concise scan summary with vulnerability counts
+- Critical vulnerabilities **with available fixes** displayed in the channel for immediate action
+- Full vulnerability report attached as downloadable CSV file
+- CSV includes all vulnerabilities (CRITICAL, HIGH, etc.) sorted by severity
 - Scan duration and image count summary
+- Single message format (no pagination spam)
 - Non-blocking: webhook failures don't affect scan execution
 
 ### Setup
