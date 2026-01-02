@@ -72,6 +72,10 @@ class RegistryClient:
         auth_token = base64.b64encode(auth_string.encode()).decode()
         self.oci_auth_header = f"Basic {auth_token}"
 
+        logger.info(f"RegistryClient initialized for OCIR: {self.oci_registry}")
+        logger.debug(f"OCIR username format: {self.oci_username}")
+        logger.debug(f"OCIR token present: {bool(self.oci_password)}")
+
     @staticmethod
     def parse_image_name(image: str) -> Tuple[str, str, str]:
         """Parse image name into registry, repository, and tag.
@@ -124,10 +128,18 @@ class RegistryClient:
                 # Determine auth and URL based on registry
                 if self.is_ocir_image(registry):
                     url = f"https://{registry}/v2/{repository}/manifests/{tag}"
+                    # Try multiple manifest formats for better compatibility
                     headers = {
                         "Authorization": self.oci_auth_header,
-                        "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+                        "Accept": ", ".join([
+                            "application/vnd.docker.distribution.manifest.v2+json",
+                            "application/vnd.docker.distribution.manifest.v1+json",
+                            "application/vnd.oci.image.manifest.v1+json",
+                        ]),
                     }
+                    logger.debug(f"OCIR manifest request: {url}")
+                    logger.debug(f"OCIR username: {self.oci_username}")
+                    logger.debug(f"Auth header present: {bool(self.oci_auth_header)}")
                 elif registry == "docker.io":
                     # Docker Hub uses different auth flow
                     token = self._get_dockerhub_token(repository)
@@ -355,6 +367,13 @@ class RegistryClient:
             span.set_attribute("image.registry", registry)
             span.set_attribute("image.repository", repository)
             span.set_attribute("image.current_tag", current_tag)
+
+            # Skip 'latest' tag - it's always the most recent by definition
+            if current_tag == "latest":
+                logger.debug(f"Skipping version check for {image} (latest tag)")
+                span.set_attribute("update.check.skipped", True)
+                span.set_attribute("update.skip_reason", "latest_tag")
+                return None
 
             # Parse current version
             current_version = self.parse_version(current_tag)
