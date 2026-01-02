@@ -127,10 +127,16 @@ class RegistryClient:
             try:
                 # Determine auth and URL based on registry
                 if self.is_ocir_image(registry):
+                    # OCIR requires bearer token authentication
+                    token = self._get_ocir_token(registry, repository)
+                    if not token:
+                        logger.warning(f"Could not get OCIR token for {repository}")
+                        return None
+
                     url = f"https://{registry}/v2/{repository}/manifests/{tag}"
                     # Try multiple manifest formats for better compatibility
                     headers = {
-                        "Authorization": self.oci_auth_header,
+                        "Authorization": f"Bearer {token}",
                         "Accept": ", ".join([
                             "application/vnd.docker.distribution.manifest.v2+json",
                             "application/vnd.docker.distribution.manifest.v1+json",
@@ -138,8 +144,7 @@ class RegistryClient:
                         ]),
                     }
                     logger.debug(f"OCIR manifest request: {url}")
-                    logger.debug(f"OCIR username: {self.oci_username}")
-                    logger.debug(f"Auth header present: {bool(self.oci_auth_header)}")
+                    logger.debug("Using bearer token authentication")
                 elif registry == "docker.io":
                     # Docker Hub uses different auth flow
                     token = self._get_dockerhub_token(repository)
@@ -190,8 +195,14 @@ class RegistryClient:
 
             # Fetch the config blob
             if self.is_ocir_image(registry):
+                # Get OCIR token for blob access
+                token = self._get_ocir_token(registry, repository)
+                if not token:
+                    logger.warning(f"Could not get OCIR token for blob access: {repository}")
+                    return None
+
                 url = f"https://{registry}/v2/{repository}/blobs/{config_digest}"
-                headers = {"Authorization": self.oci_auth_header}
+                headers = {"Authorization": f"Bearer {token}"}
             elif registry == "docker.io":
                 token = self._get_dockerhub_token(repository)
                 url = f"https://registry-1.docker.io/v2/{repository}/blobs/{config_digest}"
@@ -238,6 +249,35 @@ class RegistryClient:
             logger.warning(f"Failed to get Docker Hub token: {e}")
             return ""
 
+    def _get_ocir_token(self, registry: str, repository: str, scope: str = "pull") -> str:
+        """Get authentication token for OCIR.
+
+        Args:
+            registry: OCIR registry hostname
+            repository: Repository name
+            scope: Scope for token (default: pull)
+
+        Returns:
+            Bearer token
+        """
+        # OCIR uses similar token auth to Docker Hub
+        service = registry
+        url = f"https://{registry}/v2/token?service={service}&scope=repository:{repository}:{scope}"
+
+        try:
+            # Use Basic auth to get the token
+            auth = (self.oci_username, self.oci_password)
+            logger.debug(f"Requesting OCIR token from: {url}")
+            response = requests.get(url, auth=auth, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            token = data.get("token", data.get("access_token", ""))
+            logger.debug(f"OCIR token obtained: {bool(token)}")
+            return token
+        except Exception as e:
+            logger.warning(f"Failed to get OCIR token: {e}")
+            return ""
+
     def get_image_tags(self, registry: str, repository: str) -> list[str]:
         """Fetch all tags for a given image repository.
 
@@ -255,8 +295,14 @@ class RegistryClient:
             try:
                 # Build URL and headers based on registry type
                 if self.is_ocir_image(registry):
+                    # Get OCIR token for tag list access
+                    token = self._get_ocir_token(registry, repository)
+                    if not token:
+                        logger.warning(f"Could not get OCIR token for tag list: {repository}")
+                        return []
+
                     url = f"https://{registry}/v2/{repository}/tags/list"
-                    headers = {"Authorization": self.oci_auth_header}
+                    headers = {"Authorization": f"Bearer {token}"}
                 elif registry == "docker.io":
                     # Docker Hub API v2
                     url = f"https://hub.docker.com/v2/repositories/{repository}/tags?page_size=100"
