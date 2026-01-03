@@ -38,6 +38,12 @@ OKE clusters do **NOT** support standard Kubernetes service accounts for image p
 - Format: `${OCI_USERNAME}` = `tenancy/username`, `${OCI_TOKEN}` = auth token
 - Same credentials used for image pushes in the related `github-workflows` repository
 
+**Version Checking:**
+- Uses OCI Python SDK (`oci==2.164.2`) instead of HTTP API
+- Requires OCI SDK configuration at `~/.oci/config` or via environment variables
+- Authenticates via `oci.config.from_file()` for config file authentication
+- More reliable than HTTP Basic auth and provides better performance
+
 ### OpenTelemetry Pattern
 **Critical:** All modules follow a consistent OTLP integration pattern:
 
@@ -52,7 +58,8 @@ tracer = trace.get_tracer(__name__)
 class MyClass:
     def __init__(self, cfg: Config, logger_provider):
         self.cfg = cfg
-        logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
+        if logger_provider:  # Check before adding handler
+            logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
 
     def my_method(self):
         with tracer.start_as_current_span("operation-name") as span:
@@ -63,11 +70,12 @@ class MyClass:
 
 **Key points:**
 - Use standard Python `logging.getLogger()`, NOT structlog
-- Pass `logger_provider` from `setup_telemetry()` to all modules
-- Add `LoggingHandler` in `__init__` methods
-- Wrap significant operations in tracing spans
+- Pass `logger_provider` from `setup_telemetry()` to all modules (may be `None` if disabled)
+- Check for `None` before adding `LoggingHandler` in `__init__` methods
+- Wrap significant operations in tracing spans (NoOpTracer used automatically when disabled)
 - Set meaningful span attributes for observability
 - Use `trace.get_tracer(__name__)` at module level
+- OTLP components can be individually disabled via environment variables
 
 ### Metrics Strategy
 **Simplified to single gauge metric:**
@@ -82,13 +90,16 @@ meter.create_gauge(
 
 **Usage:**
 ```python
-metrics["scan_total"].set(
-    vulnerabilities.get("CRITICAL", 0),
-    {"image": image, "severity": "critical"}
-)
+if self.metrics:  # Check for None when metrics disabled
+    metrics["scan_total"].set(
+        vulnerabilities.get("CRITICAL", 0),
+        {"image": image, "severity": "critical"}
+    )
 ```
 
 **Attributes:** `image` (string), `severity` (string: "critical", "high", "medium", "low")
+
+**Note:** `create_metrics()` returns `None` when `meter_provider` is `None` (metrics disabled). Always check for `None` before using.
 
 **Why:** Provides current state view per image, simpler than multiple metrics, easier alerting.
 
@@ -123,13 +134,20 @@ oke-security-scanner/
 ## Important Implementation Details
 
 ### src/telemetry.py
-**Purpose:** Initialize OpenTelemetry with OTLP exporters
+**Purpose:** Initialize OpenTelemetry with OTLP exporters based on configuration
 
-**Returns:** `(tracer, meter, logger_provider)` tuple
+**Function signature:** `setup_telemetry(cfg: Config) -> tuple[Optional[TracerProvider], Optional[MeterProvider], Optional[LoggerProvider]]`
+
+**Returns:** Tuple of providers (each may be `None` if disabled via config)
 
 **Key functions:**
-- `setup_telemetry()` - Configures OTLP exporters for traces, metrics, logs
-- `create_metrics(meter)` - Creates the `image_scan` gauge metric
+- `setup_telemetry(cfg)` - Conditionally configures OTLP exporters for traces, metrics, logs based on config flags
+- `create_metrics(meter_provider)` - Creates the `image_scan` gauge metric, returns `None` if meter_provider is `None`
+
+**Conditional initialization:**
+- Checks `cfg.otlp_traces_enabled`, `cfg.otlp_metrics_enabled`, `cfg.otlp_logs_enabled`
+- Returns `None` for disabled components
+- All code safely handles `None` providers (NoOp pattern or explicit checks)
 
 **Resource detection:** Uses `OTELResourceDetector()` for automatic resource attributes
 
@@ -138,8 +156,8 @@ oke-security-scanner/
 
 **Flow:**
 1. Load configuration from environment variables
-2. Setup OpenTelemetry
-3. Initialize scanner and Kubernetes client (passing logger_provider)
+2. Setup OpenTelemetry (conditionally based on config flags)
+3. Initialize scanner and Kubernetes client (passing logger_provider which may be None)
 4. Update Trivy database
 5. Discover images from cluster
 6. Scan each image for vulnerabilities
@@ -148,7 +166,7 @@ oke-security-scanner/
 9. Send Discord notifications (if configured)
 10. Exit with code 1 if critical vulnerabilities found, 0 otherwise
 
-**Root span:** `security-scan` wraps entire operation
+**Note:** Root span (`security-scan`) only created if traces are enabled. When disabled, operations still traced via NoOpTracer (safe, no-op).
 
 ### src/scanner.py
 **Purpose:** Wrapper for Trivy CLI
@@ -189,6 +207,9 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 - `OCI_NAMESPACE` - OCIR namespace
 - `OTLP_ENDPOINT` - OTLP collector endpoint (default: http://localhost:4317)
 - `OTLP_INSECURE` - Use insecure connection (default: true)
+- `OTLP_TRACES_ENABLED` - Enable OTLP trace export (default: true)
+- `OTLP_METRICS_ENABLED` - Enable OTLP metrics export (default: true)
+- `OTLP_LOGS_ENABLED` - Enable OTLP logs export (default: true)
 - `TRIVY_SEVERITY` - Severities to report (default: CRITICAL,HIGH)
 - `TRIVY_TIMEOUT` - Scan timeout in seconds (default: 300)
 - `SCAN_NAMESPACES` - Comma-separated namespaces to scan (optional)
@@ -203,15 +224,23 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 **Key methods:**
 - `check_for_updates(image)` - Checks if newer version exists for given image
 - `get_image_tags(registry, repository)` - Fetches all tags from registry API
-- `get_image_creation_date(registry, repository, tag)` - Gets image creation date from manifest
+- `get_image_creation_date(registry, repository, tag)` - Gets image creation date (from cache or manifest)
 - `parse_image_name(image)` - Parses image into registry, repository, and tag components
 - `parse_version(tag)` - Parses semver or commit hash tags
 - `get_latest_version(registry, repository, tags)` - Determines latest available version
+- `_get_ocir_images_via_sdk(repository)` - Fetches OCIR images using OCI SDK with caching
 
 **Supported registries:**
-- **OCIR**: Oracle Container Image Registry (authenticated with OCI credentials)
+- **OCIR**: Oracle Container Image Registry (authenticated via OCI SDK with config file)
 - **Docker Hub**: Public registry using Docker Hub API v2
 - **GitHub Container Registry (ghcr.io)**: Public images via standard Docker v2 API
+
+**OCIR Implementation:**
+- Uses OCI Python SDK (`oci.artifacts.ArtifactsClient`)
+- Authenticates via `~/.oci/config` or environment variables (see OCI SDK docs)
+- Calls `list_container_images()` API with tenancy-level compartment ID
+- Caches image data (tag, created_at, digest) to avoid repeated API calls
+- Single API call per repository provides all tags and metadata
 
 **Version comparison strategies:**
 - **Semver tags** (v1.2.3, 1.2.3): Parsed and compared by major.minor.patch
@@ -221,9 +250,14 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 **Spans:** `check-for-updates`, `get-image-tags`, `get-image-manifest`
 
 **Authentication:**
-- OCIR: Uses `OCI_USERNAME` and `OCI_TOKEN` with Basic auth
+- OCIR: Uses OCI SDK with config file authentication (`oci.config.from_file()`)
 - Docker Hub: Fetches bearer token from auth.docker.io
 - GitHub Container Registry: Public access (no auth required)
+
+**Caching:**
+- OCIR image data cached in `_ocir_image_cache` dict
+- Keyed by repository name
+- Reduces API calls for version checking (single call per repository)
 
 ### src/version_reporter.py
 **Purpose:** Generate formatted reports for image version updates
@@ -413,17 +447,18 @@ RUN wget -qO trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/downlo
 ### Adding observability to a new module
 1. Import: `from logging import getLogger; from opentelemetry import trace`
 2. Module-level: `logger = getLogger(__name__); tracer = trace.get_tracer(__name__)`
-3. Accept `logger_provider` parameter in `__init__`
-4. Add handler: `logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))`
-5. Wrap operations in spans: `with tracer.start_as_current_span("span-name") as span:`
+3. Accept `logger_provider` parameter in `__init__` (may be None)
+4. Add handler with None check: `if logger_provider: logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))`
+5. Wrap operations in spans: `with tracer.start_as_current_span("span-name") as span:` (safe even when traces disabled)
 6. Set span attributes: `span.set_attribute("key", value)`
 
 ### Adding a new metric
 1. Define in `create_metrics()` in `src/telemetry.py`
-2. Add to returned dictionary
+2. Add to returned dictionary (remember function returns None if meter_provider is None)
 3. Pass metrics dict to module that needs it
-4. Set/increment metric in code
-5. Document in README.md metrics section
+4. Check for None before using: `if self.metrics:` before recording
+5. Set/increment metric in code
+6. Document in README.md metrics section
 
 ### Testing locally
 1. Ensure `kubectl` access to OKE cluster
@@ -466,13 +501,14 @@ kubectl logs -f job/manual-scan-<timestamp>
 ## Dependencies
 
 **Python packages (requirements.txt):**
-- `kubernetes` - Kubernetes API client
+- `kubernetes==34.1.0` - Kubernetes API client
+- `oci==2.164.2` - Oracle Cloud Infrastructure SDK for OCIR integration
 - `opentelemetry-*` - OTLP SDK, exporters, instrumentation
 - `requests` - HTTP library for Discord webhook calls and registry API queries
 - `dappertable` - Table formatting for Discord notifications
 - System dependencies: Trivy binary (installed in Dockerfile)
 
-**Note:** No additional dependencies required for version checking - uses built-in `requests` library for registry API calls
+**Note:** OCIR version checking uses OCI SDK, Docker Hub and GitHub Container Registry use HTTP API via `requests`
 
 **External services:**
 - OCIR for image storage
@@ -498,19 +534,27 @@ This project shares OCIR credentials and patterns with the `github-workflows` re
 ## Common Pitfalls
 
 1. **DO NOT** use structlog - use standard `logging.getLogger()`
-2. **DO NOT** forget to pass `logger_provider` to modules
-3. **DO NOT** commit secrets to git (use k8s/secret-example.yaml as template)
-4. **DO NOT** skip span attributes - they're critical for observability
-5. **DO NOT** assume OKE supports standard K8s service accounts for image pulls
-6. **DO NOT** install Trivy from apt repository - use GitHub releases instead
+2. **DO NOT** forget to pass `logger_provider` to modules (may be `None` if OTLP logs disabled)
+3. **DO NOT** forget to check for `None` before using `logger_provider` or `metrics`
+   - Always use `if logger_provider:` before adding LoggingHandler
+   - Always use `if self.metrics:` before recording metrics
+4. **DO NOT** commit secrets to git (use k8s/secret-example.yaml as template)
+5. **DO NOT** skip span attributes - they're critical for observability
+6. **DO NOT** assume OKE supports standard K8s service accounts for image pulls
+7. **DO NOT** install Trivy from apt repository - use GitHub releases instead
    - Apt repository doesn't support newer Debian versions
    - Will cause `404 Not Found` errors during build
-7. **DO NOT** forget to add missing config fields to `Config.from_env()` method
+8. **DO NOT** forget to add missing config fields to `Config.from_env()` method
    - All dataclass fields must be initialized in the class method
    - Missing fields will cause `no-value-for-parameter` errors
-8. **REMEMBER** Trivy binary is bundled, database updates at runtime
-9. **REMEMBER** k8s/ files are examples and must be customized
-10. **REMEMBER** to run pylint/tox before committing - CI will fail if code doesn't pass
+9. **DO NOT** forget OCI SDK configuration for OCIR version checking
+   - Requires `~/.oci/config` or OCI environment variables
+   - Without proper config, OCIR image version checks will fail silently
+   - See [OCI SDK Configuration](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/sdkconfig.htm)
+10. **REMEMBER** Trivy binary is bundled, database updates at runtime
+11. **REMEMBER** k8s/ files are examples and must be customized
+12. **REMEMBER** to run pylint/tox before committing - CI will fail if code doesn't pass
+13. **REMEMBER** OCIR uses OCI SDK, not HTTP API - different from Docker Hub and ghcr.io
 
 ## Known Issues and Resolutions
 
@@ -542,16 +586,30 @@ This project shares OCIR credentials and patterns with the `github-workflows` re
 **Resolution:** Added `logger_provider` argument to KubernetesClient instantiation in main.py
 **Files affected:** src/main.py
 
+### Issue 5: OCIR 401 Unauthorized Errors
+**Error:** 401 errors when fetching OCIR image tags via HTTP API
+**Cause:** HTTP Basic authentication with OCIR credentials not working reliably
+**Resolution:** Switched to OCI Python SDK (`oci.artifacts.ArtifactsClient`) with config file authentication
+**Implementation:**
+- Uses `oci.config.from_file()` to load `~/.oci/config`
+- Calls `list_container_images()` API with tenancy compartment ID
+- Caches results to avoid repeated API calls
+- Docker Hub and ghcr.io continue using HTTP API (no auth issues)
+**Files affected:** src/registry_client.py, requirements.txt
+**Benefit:** More reliable authentication + better performance (single API call with all metadata)
+
 ## Version Update Checking Implementation Details
 
 ### Registry API Patterns
 
 **OCIR (Oracle Container Image Registry):**
-- Uses Docker Registry HTTP API V2
-- Requires Basic authentication with `${OCI_NAMESPACE}/${OCI_USERNAME}:${OCI_TOKEN}`
-- Tag list: `GET https://{registry}/v2/{repository}/tags/list`
-- Manifest: `GET https://{registry}/v2/{repository}/manifests/{tag}`
-- Blob (for creation date): `GET https://{registry}/v2/{repository}/blobs/{digest}`
+- Uses OCI Python SDK (`oci.artifacts.ArtifactsClient`)
+- Authentication via `oci.config.from_file()` (reads `~/.oci/config`)
+- API call: `list_container_images(compartment_id, repository_name)`
+- Returns list of images with tag, created_at, and digest
+- Compartment ID obtained from tenancy OCID in OCI config
+- **Advantage:** Single API call provides all tags with metadata (no per-tag manifest fetches)
+- **Caching:** Results cached in `_ocir_image_cache` dict to avoid repeated calls
 
 **Docker Hub:**
 - Tag list uses Hub API v2: `GET https://hub.docker.com/v2/repositories/{repository}/tags`
@@ -584,15 +642,20 @@ This project shares OCIR credentials and patterns with the `github-workflows` re
 ### Performance Considerations
 
 **API calls per image:**
-- 1 call: Get tags list
-- N calls: Get creation date for each non-semver tag (where N = number of non-semver tags)
-- Result: Can be slow for images with many commit hash tags
+- **OCIR**: 1 call per repository (via OCI SDK `list_container_images()`)
+  - Returns all tags with creation dates in single response
+  - Cached for subsequent lookups in same scan run
+  - **Fastest option** - no per-tag manifest fetches needed
+- **Docker Hub / ghcr.io**: 1 call for tags list + N calls for creation dates
+  - N = number of non-semver tags (commit hashes)
+  - Can be slow for images with many commit hash tags
 
 **Optimization strategies:**
-- Uses requests session for connection pooling
+- OCIR uses OCI SDK with caching (single API call per repository)
+- Docker Hub/ghcr.io use requests session for connection pooling
 - 10-second timeout per API call
 - Failures are logged but don't block scan
-- Semver-only images are fastest (no manifest fetching required)
+- Semver-only images are fastest (no manifest fetching required for Docker Hub/ghcr.io)
 
 ### Error Handling
 
