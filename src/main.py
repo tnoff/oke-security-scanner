@@ -5,7 +5,6 @@ import time
 import logging
 from logging import getLogger
 
-from opentelemetry import trace, metrics
 from opentelemetry.sdk._logs import LoggingHandler
 
 from .config import Config

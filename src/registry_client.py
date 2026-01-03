@@ -69,12 +69,18 @@ class RegistryClient:
         # Cache for OCIR image data (repository -> list of image dicts)
         self._ocir_image_cache = {}
 
-        # Initialize OCI Artifacts client with config file authentication
+        # Cache for repository -> compartment_id mapping
+        self._repository_compartment_cache = {}
+
+        # Initialize OCI clients with config file authentication
         self.artifacts_client = None
+        self.identity_client = None
+        self.oci_config = None
         try:
             # Try to load OCI config from default location (~/.oci/config)
-            oci_config = oci.config.from_file()
-            self.artifacts_client = oci.artifacts.ArtifactsClient(oci_config)
+            self.oci_config = oci.config.from_file()
+            self.artifacts_client = oci.artifacts.ArtifactsClient(self.oci_config)
+            self.identity_client = oci.identity.IdentityClient(self.oci_config)
             logger.info(f"RegistryClient initialized with OCI SDK for OCIR: {self.oci_registry}")
         except Exception as e:
             logger.warning(f"Failed to initialize OCI SDK client: {e}")
@@ -114,27 +120,98 @@ class RegistryClient:
         """Check if registry is OCIR."""
         return registry == self.oci_registry
 
-    def _get_ocir_compartment_id(self) -> Optional[str]:
-        """Get compartment ID for OCIR operations.
+    def _get_tenancy_id(self) -> Optional[str]:
+        """Get tenancy OCID from OCI config."""
+        if not self.oci_config:
+            return None
+        return self.oci_config.get('tenancy')
 
-        For images in OCIR, they're typically stored at the tenancy (root compartment) level.
-        We can get the tenancy OCID from the OCI config.
+    def _list_all_compartments(self) -> list[str]:
+        """List all compartments in the tenancy (including tenancy root).
+
+        Returns:
+            List of compartment OCIDs to search
         """
+        if not self.identity_client:
+            return []
+
+        tenancy_id = self._get_tenancy_id()
+        if not tenancy_id:
+            return []
+
+        compartment_ids = [tenancy_id]  # Start with root tenancy
+
+        try:
+            # List all compartments in the tenancy
+            response = self.identity_client.list_compartments(
+                compartment_id=tenancy_id,
+                compartment_id_in_subtree=True,  # Include nested compartments
+                access_level="ACCESSIBLE"  # Only compartments we can access
+            )
+
+            for compartment in response.data:
+                if compartment.lifecycle_state == "ACTIVE":
+                    compartment_ids.append(compartment.id)
+
+            logger.debug(f"Found {len(compartment_ids)} accessible compartments")
+            return compartment_ids
+
+        except Exception as e:
+            logger.warning(f"Failed to list compartments: {e}")
+            # Fall back to just the tenancy root
+            return [tenancy_id]
+
+    def _find_repository_compartment(self, repository: str) -> Optional[str]:
+        """Find which compartment contains the given repository.
+
+        Args:
+            repository: Repository name (e.g., 'tnoff/discord-bot')
+
+        Returns:
+            Compartment OCID where repository exists, or None if not found
+        """
+        # Check cache first
+        if repository in self._repository_compartment_cache:
+            logger.debug(f"Using cached compartment for repository {repository}")
+            return self._repository_compartment_cache[repository]
+
         if not self.artifacts_client:
             return None
 
-        try:
-            # Get tenancy OCID from the client config
-            config = self.artifacts_client.base_client.config
-            if 'tenancy' in config:
-                return config['tenancy']
-        except Exception as e:
-            logger.debug(f"Could not get tenancy ID from config: {e}")
+        # Get all accessible compartments
+        compartments = self._list_all_compartments()
 
+        # Search each compartment for the repository
+        for compartment_id in compartments:
+            try:
+                response = self.artifacts_client.list_container_images(
+                    compartment_id=compartment_id,
+                    repository_name=repository,
+                    limit=1  # Just check if it exists
+                )
+
+                # If we got any results, this compartment has the repository
+                if response.data.items:
+                    logger.info(f"Found repository {repository} in compartment {compartment_id}")
+                    # Cache the result
+                    self._repository_compartment_cache[repository] = compartment_id
+                    return compartment_id
+
+            except oci.exceptions.ServiceError as e:
+                # 404 means repository doesn't exist in this compartment, continue searching
+                if e.status == 404:
+                    continue
+                # Other errors - log and continue
+                logger.debug(f"Error checking compartment {compartment_id}: {e.message}")
+                continue
+
+        logger.warning(f"Repository {repository} not found in any accessible compartment")
         return None
 
     def _get_ocir_images_via_sdk(self, repository: str) -> list[dict]:
         """Get OCIR images using OCI SDK.
+
+        Searches across all accessible compartments to find the repository.
 
         Args:
             repository: Repository name (e.g., 'tnoff/discord-bot')
@@ -151,14 +228,14 @@ class RegistryClient:
             logger.debug("OCI SDK client not available")
             return []
 
-        compartment_id = self._get_ocir_compartment_id()
+        # Find which compartment contains this repository
+        compartment_id = self._find_repository_compartment(repository)
         if not compartment_id:
-            logger.warning("Could not determine compartment ID for OCIR")
+            logger.warning(f"Could not find compartment for repository {repository}")
             return []
 
         try:
             # List all container images in the repository
-            # The display_name should match the repository path
             response = self.artifacts_client.list_container_images(
                 compartment_id=compartment_id,
                 repository_name=repository

@@ -17,6 +17,9 @@ class TestConfig:
         monkeypatch.setenv("OCI_NAMESPACE", "testnamespace")
         monkeypatch.setenv("OTLP_ENDPOINT", "http://localhost:4318")
         monkeypatch.setenv("OTLP_INSECURE", "true")
+        monkeypatch.setenv("OTLP_TRACES_ENABLED", "true")
+        monkeypatch.setenv("OTLP_METRICS_ENABLED", "true")
+        monkeypatch.setenv("OTLP_LOGS_ENABLED", "true")
         monkeypatch.setenv("TRIVY_SEVERITY", "CRITICAL,HIGH,MEDIUM")
         monkeypatch.setenv("TRIVY_TIMEOUT", "600")
         monkeypatch.setenv("SCAN_NAMESPACES", "default,kube-system")
@@ -31,6 +34,9 @@ class TestConfig:
         assert config.oci_namespace == "testnamespace"
         assert config.otlp_endpoint == "http://localhost:4318"
         assert config.otlp_insecure is True
+        assert config.otlp_traces_enabled is True
+        assert config.otlp_metrics_enabled is True
+        assert config.otlp_logs_enabled is True
         assert config.trivy_severity == "CRITICAL,HIGH,MEDIUM"
         assert config.trivy_timeout == 600
         assert config.namespaces == ["default", "kube-system"]
@@ -50,6 +56,9 @@ class TestConfig:
         # Check defaults
         assert config.otlp_endpoint == "http://localhost:4317"
         assert config.otlp_insecure is True
+        assert config.otlp_traces_enabled is True
+        assert config.otlp_metrics_enabled is True
+        assert config.otlp_logs_enabled is True
         assert config.trivy_severity == "CRITICAL,HIGH"
         assert config.trivy_timeout == 300
         assert config.namespaces == []
@@ -102,3 +111,57 @@ class TestConfig:
 
         config = Config.from_env()
         assert config.discord_webhook_url == ""
+
+    def test_otlp_traces_disabled(self, monkeypatch):
+        """Test OTLP_TRACES_ENABLED=false."""
+        monkeypatch.setenv("OCI_REGISTRY", "test.ocir.io")
+        monkeypatch.setenv("OCI_USERNAME", "testuser")
+        monkeypatch.setenv("OCI_TOKEN", "testtoken")
+        monkeypatch.setenv("OCI_NAMESPACE", "testnamespace")
+        monkeypatch.setenv("OTLP_TRACES_ENABLED", "false")
+
+        config = Config.from_env()
+        assert config.otlp_traces_enabled is False
+        assert config.otlp_metrics_enabled is True  # Others still default to true
+        assert config.otlp_logs_enabled is True
+
+    def test_otlp_metrics_disabled(self, monkeypatch):
+        """Test OTLP_METRICS_ENABLED=false."""
+        monkeypatch.setenv("OCI_REGISTRY", "test.ocir.io")
+        monkeypatch.setenv("OCI_USERNAME", "testuser")
+        monkeypatch.setenv("OCI_TOKEN", "testtoken")
+        monkeypatch.setenv("OCI_NAMESPACE", "testnamespace")
+        monkeypatch.setenv("OTLP_METRICS_ENABLED", "false")
+
+        config = Config.from_env()
+        assert config.otlp_traces_enabled is True
+        assert config.otlp_metrics_enabled is False
+        assert config.otlp_logs_enabled is True
+
+    def test_otlp_logs_disabled(self, monkeypatch):
+        """Test OTLP_LOGS_ENABLED=false."""
+        monkeypatch.setenv("OCI_REGISTRY", "test.ocir.io")
+        monkeypatch.setenv("OCI_USERNAME", "testuser")
+        monkeypatch.setenv("OCI_TOKEN", "testtoken")
+        monkeypatch.setenv("OCI_NAMESPACE", "testnamespace")
+        monkeypatch.setenv("OTLP_LOGS_ENABLED", "false")
+
+        config = Config.from_env()
+        assert config.otlp_traces_enabled is True
+        assert config.otlp_metrics_enabled is True
+        assert config.otlp_logs_enabled is False
+
+    def test_all_otlp_disabled(self, monkeypatch):
+        """Test all OTLP components disabled."""
+        monkeypatch.setenv("OCI_REGISTRY", "test.ocir.io")
+        monkeypatch.setenv("OCI_USERNAME", "testuser")
+        monkeypatch.setenv("OCI_TOKEN", "testtoken")
+        monkeypatch.setenv("OCI_NAMESPACE", "testnamespace")
+        monkeypatch.setenv("OTLP_TRACES_ENABLED", "false")
+        monkeypatch.setenv("OTLP_METRICS_ENABLED", "false")
+        monkeypatch.setenv("OTLP_LOGS_ENABLED", "false")
+
+        config = Config.from_env()
+        assert config.otlp_traces_enabled is False
+        assert config.otlp_metrics_enabled is False
+        assert config.otlp_logs_enabled is False
