@@ -19,7 +19,8 @@ class KubernetesClient:
     def __init__(self, cfg: Config, logger_provider):
         """Initialize Kubernetes client."""
         self.cfg = cfg
-        logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
+        if logger_provider:
+            logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
 
         with tracer.start_as_current_span("init-k8s-client") as span:
             try:

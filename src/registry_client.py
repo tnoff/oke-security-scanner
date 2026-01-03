@@ -1,6 +1,5 @@
 """OCIR registry client for fetching available image tags."""
 
-import base64
 import re
 from logging import getLogger
 from typing import Optional, Tuple
@@ -9,6 +8,7 @@ from datetime import datetime
 
 import requests
 from opentelemetry import trace
+import oci
 
 from .config import Config
 
@@ -64,17 +64,23 @@ class RegistryClient:
         """Initialize registry client."""
         self.cfg = cfg
         self.oci_registry = cfg.oci_registry
-        self.oci_username = f"{cfg.oci_namespace}/{cfg.oci_username}"
-        self.oci_password = cfg.oci_token
+        self.oci_namespace = cfg.oci_namespace
 
-        # Create auth header for OCIR API
-        auth_string = f"{self.oci_username}:{self.oci_password}"
-        auth_token = base64.b64encode(auth_string.encode()).decode()
-        self.oci_auth_header = f"Basic {auth_token}"
+        # Cache for OCIR image data (repository -> list of image dicts)
+        self._ocir_image_cache = {}
 
-        logger.info(f"RegistryClient initialized for OCIR: {self.oci_registry}")
-        logger.debug(f"OCIR username format: {self.oci_username}")
-        logger.debug(f"OCIR token present: {bool(self.oci_password)}")
+        # Initialize OCI Artifacts client with config file authentication
+        self.artifacts_client = None
+        try:
+            # Try to load OCI config from default location (~/.oci/config)
+            oci_config = oci.config.from_file()
+            self.artifacts_client = oci.artifacts.ArtifactsClient(oci_config)
+            logger.info(f"RegistryClient initialized with OCI SDK for OCIR: {self.oci_registry}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize OCI SDK client: {e}")
+            logger.warning("OCIR image version checking will not work without OCI credentials")
+
+        logger.info(f"RegistryClient initialized for registry: {self.oci_registry}")
 
     @staticmethod
     def parse_image_name(image: str) -> Tuple[str, str, str]:
@@ -108,6 +114,78 @@ class RegistryClient:
         """Check if registry is OCIR."""
         return registry == self.oci_registry
 
+    def _get_ocir_compartment_id(self) -> Optional[str]:
+        """Get compartment ID for OCIR operations.
+
+        For images in OCIR, they're typically stored at the tenancy (root compartment) level.
+        We can get the tenancy OCID from the OCI config.
+        """
+        if not self.artifacts_client:
+            return None
+
+        try:
+            # Get tenancy OCID from the client config
+            config = self.artifacts_client.base_client.config
+            if 'tenancy' in config:
+                return config['tenancy']
+        except Exception as e:
+            logger.debug(f"Could not get tenancy ID from config: {e}")
+
+        return None
+
+    def _get_ocir_images_via_sdk(self, repository: str) -> list[dict]:
+        """Get OCIR images using OCI SDK.
+
+        Args:
+            repository: Repository name (e.g., 'tnoff/discord-bot')
+
+        Returns:
+            List of image dictionaries with version and created_at
+        """
+        # Check cache first
+        if repository in self._ocir_image_cache:
+            logger.debug(f"Using cached OCIR image data for {repository}")
+            return self._ocir_image_cache[repository]
+
+        if not self.artifacts_client:
+            logger.debug("OCI SDK client not available")
+            return []
+
+        compartment_id = self._get_ocir_compartment_id()
+        if not compartment_id:
+            logger.warning("Could not determine compartment ID for OCIR")
+            return []
+
+        try:
+            # List all container images in the repository
+            # The display_name should match the repository path
+            response = self.artifacts_client.list_container_images(
+                compartment_id=compartment_id,
+                repository_name=repository
+            )
+
+            images = []
+            for item in response.data.items:
+                # Each item has version (tag) and time_created
+                if item.version:
+                    images.append({
+                        'tag': item.version,
+                        'created_at': item.time_created,
+                        'digest': item.digest if hasattr(item, 'digest') else None
+                    })
+
+            # Cache the results
+            self._ocir_image_cache[repository] = images
+            logger.debug(f"Found {len(images)} OCIR images for {repository}")
+            return images
+
+        except oci.exceptions.ServiceError as e:
+            logger.warning(f"OCI SDK error listing images for {repository}: {e.message}")
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to list OCIR images for {repository}: {e}")
+            return []
+
     def get_image_manifest(self, registry: str, repository: str, tag: str) -> Optional[dict]:
         """Fetch image manifest from registry.
 
@@ -119,33 +197,20 @@ class RegistryClient:
         Returns:
             Manifest data or None on error
         """
+        # pylint: disable=too-many-return-statements
         with tracer.start_as_current_span("get-image-manifest") as span:
             span.set_attribute("registry", registry)
             span.set_attribute("repository", repository)
             span.set_attribute("tag", tag)
 
             try:
-                # Determine auth and URL based on registry
+                # OCIR images use OCI SDK, not this method
                 if self.is_ocir_image(registry):
-                    # OCIR requires bearer token authentication
-                    token = self._get_ocir_token(registry, repository)
-                    if not token:
-                        logger.warning(f"Could not get OCIR token for {repository}")
-                        return None
+                    logger.warning(f"get_image_manifest() should not be called for OCIR images: {repository}")
+                    return None
 
-                    url = f"https://{registry}/v2/{repository}/manifests/{tag}"
-                    # Try multiple manifest formats for better compatibility
-                    headers = {
-                        "Authorization": f"Bearer {token}",
-                        "Accept": ", ".join([
-                            "application/vnd.docker.distribution.manifest.v2+json",
-                            "application/vnd.docker.distribution.manifest.v1+json",
-                            "application/vnd.oci.image.manifest.v1+json",
-                        ]),
-                    }
-                    logger.debug(f"OCIR manifest request: {url}")
-                    logger.debug("Using bearer token authentication")
-                elif registry == "docker.io":
+                # Determine auth and URL based on registry
+                if registry == "docker.io":
                     # Docker Hub uses different auth flow
                     token = self._get_dockerhub_token(repository)
                     url = f"https://registry-1.docker.io/v2/{repository}/manifests/{tag}"
@@ -183,6 +248,18 @@ class RegistryClient:
         Returns:
             Creation datetime or None
         """
+        # pylint: disable=too-many-return-statements
+        # For OCIR images, use cached SDK data
+        if self.is_ocir_image(registry):
+            images = self._get_ocir_images_via_sdk(repository)
+            for img in images:
+                if img['tag'] == tag and img.get('created_at'):
+                    logger.debug(f"Using cached creation date for OCIR image {repository}:{tag}")
+                    return img['created_at']
+            logger.debug(f"No cached creation date found for OCIR image {repository}:{tag}")
+            return None
+
+        # For other registries, fetch manifest and extract creation date
         manifest = self.get_image_manifest(registry, repository, tag)
         if not manifest:
             return None
@@ -194,16 +271,8 @@ class RegistryClient:
                 return None
 
             # Fetch the config blob
-            if self.is_ocir_image(registry):
-                # Get OCIR token for blob access
-                token = self._get_ocir_token(registry, repository)
-                if not token:
-                    logger.warning(f"Could not get OCIR token for blob access: {repository}")
-                    return None
-
-                url = f"https://{registry}/v2/{repository}/blobs/{config_digest}"
-                headers = {"Authorization": f"Bearer {token}"}
-            elif registry == "docker.io":
+            # Note: OCIR images are handled above via OCI SDK, not here
+            if registry == "docker.io":
                 token = self._get_dockerhub_token(repository)
                 url = f"https://registry-1.docker.io/v2/{repository}/blobs/{config_digest}"
                 headers = {"Authorization": f"Bearer {token}"}
@@ -249,35 +318,6 @@ class RegistryClient:
             logger.warning(f"Failed to get Docker Hub token: {e}")
             return ""
 
-    def _get_ocir_token(self, registry: str, repository: str, scope: str = "pull") -> str:
-        """Get authentication token for OCIR.
-
-        Args:
-            registry: OCIR registry hostname
-            repository: Repository name
-            scope: Scope for token (default: pull)
-
-        Returns:
-            Bearer token
-        """
-        # OCIR uses similar token auth to Docker Hub
-        service = registry
-        url = f"https://{registry}/v2/token?service={service}&scope=repository:{repository}:{scope}"
-
-        try:
-            # Use Basic auth to get the token
-            auth = (self.oci_username, self.oci_password)
-            logger.debug(f"Requesting OCIR token from: {url}")
-            response = requests.get(url, auth=auth, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            token = data.get("token", data.get("access_token", ""))
-            logger.debug(f"OCIR token obtained: {bool(token)}")
-            return token
-        except Exception as e:
-            logger.warning(f"Failed to get OCIR token: {e}")
-            return ""
-
     def get_image_tags(self, registry: str, repository: str) -> list[str]:
         """Fetch all tags for a given image repository.
 
@@ -295,15 +335,17 @@ class RegistryClient:
             try:
                 # Build URL and headers based on registry type
                 if self.is_ocir_image(registry):
-                    # Get OCIR token for tag list access
-                    token = self._get_ocir_token(registry, repository)
-                    if not token:
-                        logger.warning(f"Could not get OCIR token for tag list: {repository}")
-                        return []
+                    # Use OCI SDK for OCIR
+                    images = self._get_ocir_images_via_sdk(repository)
+                    if images:
+                        tags = [img['tag'] for img in images]
+                        span.set_attribute("registry.tags.count", len(tags))
+                        logger.debug(f"Found {len(tags)} tags for {repository} via OCI SDK")
+                        return tags
+                    logger.warning(f"No images found for OCIR repository: {repository}")
+                    return []
 
-                    url = f"https://{registry}/v2/{repository}/tags/list"
-                    headers = {"Authorization": f"Bearer {token}"}
-                elif registry == "docker.io":
+                if registry == "docker.io":
                     # Docker Hub API v2
                     url = f"https://hub.docker.com/v2/repositories/{repository}/tags?page_size=100"
                     response = requests.get(url, timeout=10)
@@ -313,25 +355,24 @@ class RegistryClient:
                     span.set_attribute("registry.tags.count", len(tags))
                     logger.debug(f"Found {len(tags)} tags for {repository} on Docker Hub")
                     return tags
-                elif registry == "ghcr.io":
+
+                if registry == "ghcr.io":
                     # GitHub Container Registry uses standard Docker v2 API
                     url = f"https://{registry}/v2/{repository}/tags/list"
                     headers = {}
-                else:
-                    logger.warning(f"Unsupported registry: {registry}")
-                    return []
+                    logger.debug(f"Fetching tags for {repository} from {registry}")
+                    response = requests.get(url, headers=headers, timeout=10)
+                    response.raise_for_status()
 
-                logger.debug(f"Fetching tags for {repository} from {registry}")
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
+                    data = response.json()
+                    tags = data.get("tags", [])
 
-                data = response.json()
-                tags = data.get("tags", [])
+                    span.set_attribute("registry.tags.count", len(tags))
+                    logger.debug(f"Found {len(tags)} tags for {repository}")
+                    return tags
 
-                span.set_attribute("registry.tags.count", len(tags))
-                logger.debug(f"Found {len(tags)} tags for {repository}")
-
-                return tags
+                logger.warning(f"Unsupported registry: {registry}")
+                return []
 
             except requests.exceptions.RequestException as e:
                 logger.warning(f"Failed to fetch tags for {registry}/{repository}: {e}")

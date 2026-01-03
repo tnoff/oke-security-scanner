@@ -17,6 +17,9 @@ class Config:
     # OTLP configuration
     otlp_endpoint: str
     otlp_insecure: bool
+    otlp_traces_enabled: bool
+    otlp_metrics_enabled: bool
+    otlp_logs_enabled: bool
 
     # Trivy configuration
     trivy_severity: str
@@ -42,6 +45,9 @@ class Config:
             # OTLP configuration
             otlp_endpoint=os.getenv("OTLP_ENDPOINT", "http://localhost:4317"),
             otlp_insecure=os.getenv("OTLP_INSECURE", "true").lower() == "true",
+            otlp_traces_enabled=os.getenv("OTLP_TRACES_ENABLED", "true").lower() == "true",
+            otlp_metrics_enabled=os.getenv("OTLP_METRICS_ENABLED", "true").lower() == "true",
+            otlp_logs_enabled=os.getenv("OTLP_LOGS_ENABLED", "true").lower() == "true",
 
             # Trivy configuration
             trivy_severity=os.getenv("TRIVY_SEVERITY", "CRITICAL,HIGH"),
