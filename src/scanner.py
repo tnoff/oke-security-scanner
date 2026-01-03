@@ -25,7 +25,8 @@ class TrivyScanner:
         self.cfg = cfg
         self.metrics = metrics
         self.db_updated = False
-        logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
+        if logger_provider:
+            logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
 
         # Authenticate to OCIR for private image access
         self._configure_registry_auth()
@@ -147,21 +148,22 @@ class TrivyScanner:
                     f"high: {vuln_counts.get('HIGH', 0)})"
                 )
 
-                # Record metrics - set gauge with image and vulnerability counts
-                self.metrics["scan_total"].set(
-                    vuln_counts.get("CRITICAL", 0),
-                    {
-                        "image": image,
-                        "severity": "critical",
-                    }
-                )
-                self.metrics["scan_total"].set(
-                    vuln_counts.get("HIGH", 0),
-                    {
-                        "image": image,
-                        "severity": "high",
-                    }
-                )
+                # Record metrics - set gauge with image and vulnerability counts (if metrics enabled)
+                if self.metrics:
+                    self.metrics["scan_total"].set(
+                        vuln_counts.get("CRITICAL", 0),
+                        {
+                            "image": image,
+                            "severity": "critical",
+                        }
+                    )
+                    self.metrics["scan_total"].set(
+                        vuln_counts.get("HIGH", 0),
+                        {
+                            "image": image,
+                            "severity": "high",
+                        }
+                    )
 
                 # Set span attributes
                 span.set_attribute("scan.success", True)

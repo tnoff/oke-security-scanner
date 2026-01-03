@@ -1,6 +1,9 @@
 # Kubernetes client
 kubernetes==34.1.0
 
+# OCI SDK for OCIR integration
+oci==2.164.2
+
 # OpenTelemetry for observability
 opentelemetry-api
 opentelemetry-sdk==1.39.1
