@@ -5,7 +5,6 @@ import time
 import logging
 from logging import getLogger
 
-from opentelemetry import trace, metrics
 from opentelemetry.sdk._logs import LoggingHandler
 
 from .config import Config
@@ -34,6 +33,9 @@ def main():
     logger.info("Starting OKE Security Scanner")
     logger.info("=" * 60)
 
+    # Initialize providers as None so they're accessible in finally block
+    trace_provider = None
+    meter_provider = None
     logger_provider = None
 
     try:
@@ -198,10 +200,7 @@ def main():
         # Properly shutdown telemetry to flush all pending data
         logger.info("Shutting down telemetry...")
 
-        # Get providers from global registry
-        trace_provider = trace.get_tracer_provider()
-        meter_provider = metrics.get_meter_provider()
-
+        # Use providers from setup_telemetry (will be None if disabled)
         if trace_provider:
             logger.debug("Flushing traces...")
             trace_provider.force_flush(timeout_millis=30000)
