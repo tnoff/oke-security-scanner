@@ -48,7 +48,10 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 ## Prerequisites
 
 - Kubernetes cluster (OKE)
-- OCIR credentials (same as used for image pushes)
+- **OCI SDK Configuration**: For OCIR image version checking, the scanner requires OCI credentials configured at `~/.oci/config` or via environment variables
+  - Required for: Listing OCIR images and checking version updates
+  - Authentication methods: API key, instance principal, or resource principal
+  - See [OCI SDK Configuration](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/sdkconfig.htm) for setup details
 - OTLP collector endpoint (Tempo for traces, Loki for logs, Mimir for metrics)
 - Kubernetes RBAC permissions to read pods and namespaces
 
@@ -113,6 +116,11 @@ All configuration is provided via Kubernetes secrets as environment variables:
 | `OCI_USERNAME` | ✅ | - | OCIR username (`tenancy/username`) |
 | `OCI_TOKEN` | ✅ | - | OCIR auth token |
 | `OCI_NAMESPACE` | ✅ | - | OCIR namespace |
+| `OTLP_ENDPOINT` | ❌ | `http://localhost:4317` | OTLP collector endpoint |
+| `OTLP_INSECURE` | ❌ | `true` | Use insecure gRPC connection |
+| `OTLP_TRACES_ENABLED` | ❌ | `true` | Enable OTLP trace export |
+| `OTLP_METRICS_ENABLED` | ❌ | `true` | Enable OTLP metrics export |
+| `OTLP_LOGS_ENABLED` | ❌ | `true` | Enable OTLP logs export |
 | `TRIVY_SEVERITY` | ❌ | `CRITICAL,HIGH` | Vulnerability severities to report |
 | `TRIVY_TIMEOUT` | ❌ | `300` | Scan timeout in seconds |
 | `SCAN_NAMESPACES` | ❌ | (all) | Comma-separated namespaces to scan |
