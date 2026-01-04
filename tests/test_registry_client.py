@@ -374,3 +374,143 @@ class TestRegistryClient:
         images = client._get_ocir_images_via_sdk('test/repo')
 
         assert images == []
+
+    @patch('src.registry_client.oci')
+    def test_normalize_ocir_repository_with_namespace(self, mock_oci, config):
+        """Test normalize_ocir_repository strips namespace prefix."""
+        mock_oci.config.from_file.side_effect = Exception("No config")
+
+        client = RegistryClient(config)
+
+        # Should strip namespace prefix
+        assert client.normalize_ocir_repository('testnamespace/myapp') == 'myapp'
+        assert client.normalize_ocir_repository('testnamespace/my-app') == 'my-app'
+        assert client.normalize_ocir_repository('testnamespace/my_app') == 'my_app'
+
+    @patch('src.registry_client.oci')
+    def test_normalize_ocir_repository_without_namespace(self, mock_oci, config):
+        """Test normalize_ocir_repository leaves repo unchanged if no namespace prefix."""
+        mock_oci.config.from_file.side_effect = Exception("No config")
+
+        client = RegistryClient(config)
+
+        # Should not change if no namespace prefix
+        assert client.normalize_ocir_repository('myapp') == 'myapp'
+        assert client.normalize_ocir_repository('my-app') == 'my-app'
+        assert client.normalize_ocir_repository('my_app') == 'my_app'
+
+    @patch('src.registry_client.oci')
+    def test_normalize_ocir_repository_different_namespace(self, mock_oci, config):
+        """Test normalize_ocir_repository leaves repo unchanged if different namespace."""
+        mock_oci.config.from_file.side_effect = Exception("No config")
+
+        client = RegistryClient(config)
+
+        # Should not change if different namespace prefix
+        assert client.normalize_ocir_repository('othernamespace/myapp') == 'othernamespace/myapp'
+        assert client.normalize_ocir_repository('other/myapp') == 'other/myapp'
+
+    @patch('src.registry_client.oci')
+    def test_normalize_ocir_repository_no_namespace_config(self, mock_oci):
+        """Test normalize_ocir_repository when oci_namespace is not configured."""
+        config = Config(
+            oci_registry="test.ocir.io",
+            oci_username="testuser",
+            oci_token="testtoken",
+            oci_namespace="",  # Empty namespace
+            otlp_endpoint="http://localhost:4318",
+            otlp_insecure=True,
+            otlp_traces_enabled=True,
+            otlp_metrics_enabled=True,
+            otlp_logs_enabled=True,
+            trivy_severity="CRITICAL,HIGH",
+            trivy_timeout=300,
+            namespaces=[],
+            exclude_namespaces=[],
+            discord_webhook_url="",
+        )
+
+        mock_oci.config.from_file.side_effect = Exception("No config")
+
+        client = RegistryClient(config)
+
+        # Should not change anything if namespace is not configured
+        assert client.normalize_ocir_repository('testnamespace/myapp') == 'testnamespace/myapp'
+        assert client.normalize_ocir_repository('myapp') == 'myapp'
+
+    @patch('src.registry_client.oci')
+    def test_find_repository_compartment_uses_normalization(self, mock_oci, config):
+        """Test _find_repository_compartment normalizes repository name."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+
+        mock_artifacts_client = Mock()
+        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
+        mock_identity_client = Mock()
+        mock_oci.identity.IdentityClient.return_value = mock_identity_client
+
+        # Mock compartment list
+        mock_comp_response = Mock()
+        mock_comp_response.data = []
+        mock_identity_client.list_compartments.return_value = mock_comp_response
+
+        # Create proper ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        with patch.object(client.artifacts_client, 'list_container_images') as mock_list:
+            mock_response = Mock()
+            mock_response.data.items = [Mock()]
+            mock_list.return_value = mock_response
+
+            # Pass repository with namespace prefix
+            compartment_id = client._find_repository_compartment('testnamespace/myapp')
+
+            # Should call API with normalized name (without namespace)
+            assert mock_list.call_count >= 1
+            # Check that at least one call used the normalized repository name
+            call_args = mock_list.call_args
+            assert call_args.kwargs['repository_name'] == 'myapp'
+
+    @patch('src.registry_client.oci')
+    def test_get_ocir_images_uses_normalization(self, mock_oci, config):
+        """Test _get_ocir_images_via_sdk normalizes repository name."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+
+        mock_artifacts_client = Mock()
+        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        client = RegistryClient(config)
+        # Pre-populate cache with normalized name
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        # Mock image list response
+        mock_image = Mock()
+        mock_image.version = 'v1.0.0'
+        mock_image.time_created = datetime(2024, 1, 1)
+        mock_image.digest = 'sha256:abc123'
+
+        mock_response = Mock()
+        mock_response.data.items = [mock_image]
+        mock_artifacts_client.list_container_images.return_value = mock_response
+
+        # Pass repository with namespace prefix
+        images = client._get_ocir_images_via_sdk('testnamespace/myapp')
+
+        assert len(images) == 1
+        assert images[0]['tag'] == 'v1.0.0'
+
+        # Should call API with normalized name
+        mock_artifacts_client.list_container_images.assert_called_once_with(
+            compartment_id='ocid1.compartment.apps',
+            repository_name='myapp'
+        )
