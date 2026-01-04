@@ -120,6 +120,30 @@ class RegistryClient:
         """Check if registry is OCIR."""
         return registry == self.oci_registry
 
+    def normalize_ocir_repository(self, repository: str) -> str:
+        """Strip namespace prefix from OCIR repository name.
+
+        OCIR image references include the namespace in the path (e.g., 'tnoff/discord_bot'),
+        but the OCI API expects just the repository name without the namespace prefix.
+
+        Args:
+            repository: Full repository path (e.g., 'tnoff/discord_bot')
+
+        Returns:
+            Repository name without namespace prefix (e.g., 'discord_bot')
+        """
+        if not self.oci_namespace:
+            return repository
+
+        # If repository starts with namespace/, strip it
+        namespace_prefix = f"{self.oci_namespace}/"
+        if repository.startswith(namespace_prefix):
+            normalized = repository[len(namespace_prefix):]
+            logger.debug(f"Normalized OCIR repository: {repository} -> {normalized}")
+            return normalized
+
+        return repository
+
     def _get_tenancy_id(self) -> Optional[str]:
         """Get tenancy OCID from OCI config."""
         if not self.oci_config:
@@ -165,15 +189,18 @@ class RegistryClient:
         """Find which compartment contains the given repository.
 
         Args:
-            repository: Repository name (e.g., 'tnoff/discord-bot')
+            repository: Repository name (e.g., 'discord-bot', without namespace)
 
         Returns:
             Compartment OCID where repository exists, or None if not found
         """
-        # Check cache first
-        if repository in self._repository_compartment_cache:
-            logger.debug(f"Using cached compartment for repository {repository}")
-            return self._repository_compartment_cache[repository]
+        # Normalize repository name (strip namespace if present)
+        normalized_repo = self.normalize_ocir_repository(repository)
+
+        # Check cache first (use normalized name)
+        if normalized_repo in self._repository_compartment_cache:
+            logger.debug(f"Using cached compartment for repository {normalized_repo}")
+            return self._repository_compartment_cache[normalized_repo]
 
         if not self.artifacts_client:
             return None
@@ -186,15 +213,15 @@ class RegistryClient:
             try:
                 response = self.artifacts_client.list_container_images(
                     compartment_id=compartment_id,
-                    repository_name=repository,
+                    repository_name=normalized_repo,
                     limit=1  # Just check if it exists
                 )
 
                 # If we got any results, this compartment has the repository
                 if response.data.items:
-                    logger.info(f"Found repository {repository} in compartment {compartment_id}")
+                    logger.info(f"Found repository {normalized_repo} in compartment {compartment_id}")
                     # Cache the result
-                    self._repository_compartment_cache[repository] = compartment_id
+                    self._repository_compartment_cache[normalized_repo] = compartment_id
                     return compartment_id
 
             except oci.exceptions.ServiceError as e:
@@ -205,7 +232,7 @@ class RegistryClient:
                 logger.debug(f"Error checking compartment {compartment_id}: {e.message}")
                 continue
 
-        logger.warning(f"Repository {repository} not found in any accessible compartment")
+        logger.warning(f"Repository {normalized_repo} not found in any accessible compartment")
         return None
 
     def _get_ocir_images_via_sdk(self, repository: str) -> list[dict]:
@@ -214,31 +241,34 @@ class RegistryClient:
         Searches across all accessible compartments to find the repository.
 
         Args:
-            repository: Repository name (e.g., 'tnoff/discord-bot')
+            repository: Repository name (e.g., 'discord-bot', with or without namespace)
 
         Returns:
             List of image dictionaries with version and created_at
         """
-        # Check cache first
-        if repository in self._ocir_image_cache:
-            logger.debug(f"Using cached OCIR image data for {repository}")
-            return self._ocir_image_cache[repository]
+        # Normalize repository name (strip namespace if present)
+        normalized_repo = self.normalize_ocir_repository(repository)
+
+        # Check cache first (use normalized name)
+        if normalized_repo in self._ocir_image_cache:
+            logger.debug(f"Using cached OCIR image data for {normalized_repo}")
+            return self._ocir_image_cache[normalized_repo]
 
         if not self.artifacts_client:
             logger.debug("OCI SDK client not available")
             return []
 
         # Find which compartment contains this repository
-        compartment_id = self._find_repository_compartment(repository)
+        compartment_id = self._find_repository_compartment(normalized_repo)
         if not compartment_id:
-            logger.warning(f"Could not find compartment for repository {repository}")
+            logger.warning(f"Could not find compartment for repository {normalized_repo}")
             return []
 
         try:
             # List all container images in the repository
             response = self.artifacts_client.list_container_images(
                 compartment_id=compartment_id,
-                repository_name=repository
+                repository_name=normalized_repo
             )
 
             images = []
@@ -252,15 +282,15 @@ class RegistryClient:
                     })
 
             # Cache the results
-            self._ocir_image_cache[repository] = images
-            logger.debug(f"Found {len(images)} OCIR images for {repository}")
+            self._ocir_image_cache[normalized_repo] = images
+            logger.debug(f"Found {len(images)} OCIR images for {normalized_repo}")
             return images
 
         except oci.exceptions.ServiceError as e:
-            logger.warning(f"OCI SDK error listing images for {repository}: {e.message}")
+            logger.warning(f"OCI SDK error listing images for {normalized_repo}: {e.message}")
             return []
         except Exception as e:
-            logger.warning(f"Failed to list OCIR images for {repository}: {e}")
+            logger.warning(f"Failed to list OCIR images for {normalized_repo}: {e}")
             return []
 
     def get_image_manifest(self, registry: str, repository: str, tag: str) -> Optional[dict]:
