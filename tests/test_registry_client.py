@@ -514,3 +514,191 @@ class TestRegistryClient:
             compartment_id='ocid1.compartment.apps',
             repository_name='myapp'
         )
+
+    def test_image_version_age_days_with_timezone_aware_datetime(self):
+        """Test age_days() works with timezone-aware datetimes."""
+        from datetime import timezone, timedelta
+        from src.registry_client import ImageVersion
+
+        # Create a version with timezone-aware datetime (like OCI SDK returns)
+        created_date = datetime.now(timezone.utc) - timedelta(days=10)
+        version = ImageVersion(tag='abc123', created_at=created_date)
+
+        age = version.age_days()
+
+        # Should be approximately 10 days old (allow for test execution time)
+        assert age is not None
+        assert 9 <= age <= 11
+
+    def test_image_version_age_days_without_created_at(self):
+        """Test age_days() returns None when no creation date."""
+        from src.registry_client import ImageVersion
+
+        version = ImageVersion(tag='abc123')
+        age = version.age_days()
+
+        assert age is None
+
+    @patch('src.registry_client.oci')
+    def test_get_latest_version_mixed_semver_and_commit_hash(self, mock_oci, config):
+        """Test get_latest_version() with both semver and commit hash tags."""
+        from datetime import timezone, timedelta
+
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        # Mock ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        # Create test data with mixed version types
+        # Semver tag from 5 days ago
+        semver_date = datetime.now(timezone.utc) - timedelta(days=5)
+        # Commit hash from 2 days ago (newer!)
+        commit_date = datetime.now(timezone.utc) - timedelta(days=2)
+
+        # Mock the image data directly in cache (bypass SDK calls)
+        client._ocir_image_cache['myapp'] = [
+            {'tag': 'v1.0.0', 'created_at': semver_date, 'digest': 'sha256:abc'},
+            {'tag': 'abc123', 'created_at': commit_date, 'digest': 'sha256:def'},
+        ]
+
+        # Get latest version
+        registry = 'test.ocir.io'
+        repository = 'testnamespace/myapp'
+        tags = ['v1.0.0', 'abc123']
+
+        latest = client.get_latest_version(registry, repository, tags)
+
+        # Should return the commit hash (newer by creation date)
+        assert latest is not None
+        assert latest.tag == 'abc123'
+        assert latest.created_at == commit_date
+
+    @patch('src.registry_client.oci')
+    def test_get_latest_version_only_semver(self, mock_oci, config):
+        """Test get_latest_version() with only semver tags."""
+        from datetime import timezone, timedelta
+
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        # Mock ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        # Create test data with only semver
+        old_date = datetime.now(timezone.utc) - timedelta(days=10)
+        new_date = datetime.now(timezone.utc) - timedelta(days=2)
+
+        # Mock the image data directly in cache (bypass SDK calls)
+        client._ocir_image_cache['myapp'] = [
+            {'tag': '1.0.0', 'created_at': old_date, 'digest': 'sha256:abc'},
+            {'tag': '1.1.0', 'created_at': new_date, 'digest': 'sha256:def'},
+        ]
+
+        registry = 'test.ocir.io'
+        repository = 'testnamespace/myapp'
+        tags = ['1.0.0', '1.1.0']
+
+        latest = client.get_latest_version(registry, repository, tags)
+
+        # Should return the highest semver (1.1.0)
+        assert latest is not None
+        assert latest.tag == '1.1.0'
+        assert latest.major == 1
+        assert latest.minor == 1
+        assert latest.patch == 0
+
+    @patch('src.registry_client.oci')
+    def test_get_latest_version_only_commit_hashes(self, mock_oci, config):
+        """Test get_latest_version() with only commit hash tags."""
+        from datetime import timezone, timedelta
+
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        # Mock ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        # Create test data with only commit hashes
+        old_date = datetime.now(timezone.utc) - timedelta(days=10)
+        new_date = datetime.now(timezone.utc) - timedelta(days=2)
+
+        # Mock the image data directly in cache (bypass SDK calls)
+        client._ocir_image_cache['myapp'] = [
+            {'tag': 'abc123', 'created_at': old_date, 'digest': 'sha256:abc'},
+            {'tag': 'def456', 'created_at': new_date, 'digest': 'sha256:def'},
+        ]
+
+        registry = 'test.ocir.io'
+        repository = 'testnamespace/myapp'
+        tags = ['abc123', 'def456']
+
+        latest = client.get_latest_version(registry, repository, tags)
+
+        # Should return the newest by creation date
+        assert latest is not None
+        assert latest.tag == 'def456'
+        assert latest.created_at == new_date
+
+    @patch('src.registry_client.oci')
+    def test_check_for_updates_with_mixed_versions(self, mock_oci, config):
+        """Test check_for_updates() correctly handles mixed version types."""
+        from datetime import timezone, timedelta
+
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        # Mock ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        # Simulate: current image is old commit hash, newer semver exists
+        old_commit_date = datetime.now(timezone.utc) - timedelta(days=50)
+        new_semver_date = datetime.now(timezone.utc) - timedelta(days=3)
+
+        # Mock the image data directly in cache (bypass SDK calls)
+        client._ocir_image_cache['myapp'] = [
+            {'tag': 'old123', 'created_at': old_commit_date, 'digest': 'sha256:old'},
+            {'tag': '0.2.0', 'created_at': new_semver_date, 'digest': 'sha256:new'},
+        ]
+
+        # Check for updates on the old commit hash
+        image = 'test.ocir.io/testnamespace/myapp:old123'
+        update_info = client.check_for_updates(image)
+
+        # Should detect that 0.2.0 is newer
+        assert update_info is not None
+        assert update_info['current'].tag == 'old123'
+        assert update_info['latest'].tag == '0.2.0'
+        assert update_info['latest'].is_semver is True
