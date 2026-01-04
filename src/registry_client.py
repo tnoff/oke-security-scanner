@@ -95,7 +95,7 @@ class RegistryClient:
         """Parse image name into registry, repository, and tag.
 
         Args:
-            image: Full image name (e.g., 'iad.ocir.io/tnoff/discord-bot:abc123')
+            image: Full image name (e.g., 'iad.ocir.io/namespace/discord-bot:abc123')
 
         Returns:
             Tuple of (registry, repository, tag)
@@ -109,7 +109,7 @@ class RegistryClient:
         # Split registry and repository
         parts = image_path.split('/', 1)
         if len(parts) == 2 and ('.' in parts[0] or parts[0] == 'localhost'):
-            # Has explicit registry (e.g., 'iad.ocir.io/tnoff/discord-bot')
+            # Has explicit registry (e.g., 'iad.ocir.io/namespace/discord-bot')
             registry, repository = parts
         else:
             # No explicit registry, assume Docker Hub
@@ -125,11 +125,11 @@ class RegistryClient:
     def normalize_ocir_repository(self, repository: str) -> str:
         """Strip namespace prefix from OCIR repository name.
 
-        OCIR image references include the namespace in the path (e.g., 'tnoff/discord_bot'),
+        OCIR image references include the namespace in the path (e.g., 'namespace/discord_bot'),
         but the OCI API expects just the repository name without the namespace prefix.
 
         Args:
-            repository: Full repository path (e.g., 'tnoff/discord_bot')
+            repository: Full repository path (e.g., 'namespace/discord_bot')
 
         Returns:
             Repository name without namespace prefix (e.g., 'discord_bot')
@@ -432,7 +432,7 @@ class RegistryClient:
 
         Args:
             registry: Registry hostname
-            repository: Image repository (e.g., 'tnoff/discord-bot')
+            repository: Image repository (e.g., 'namespace/discord-bot')
 
         Returns:
             List of tag names
@@ -589,7 +589,7 @@ class RegistryClient:
         """Check if a newer version exists for the given image.
 
         Args:
-            image: Full image name (e.g., 'iad.ocir.io/tnoff/discord-bot:abc123')
+            image: Full image name (e.g., 'iad.ocir.io/namespace/discord-bot:abc123')
 
         Returns:
             Dictionary with update information, or None if no updates available
@@ -677,3 +677,124 @@ class RegistryClient:
 
             span.set_attribute("update.available", False)
             return None
+
+    def get_cleanup_recommendations(
+        self, images: list[str], keep_count: int = 5
+    ) -> dict[str, dict]:
+        """Generate cleanup recommendations for OCIR repositories.
+
+        Identifies old commit hash tags that can be deleted while keeping the most recent ones.
+
+        Args:
+            images: List of image names from Kubernetes deployments
+            keep_count: Number of most recent commit hash tags to keep (default: 5)
+
+        Returns:
+            Dictionary mapping repository names to cleanup info:
+            {
+                'repository_name': {
+                    'registry': 'iad.ocir.io',
+                    'repository': 'namespace/myapp',
+                    'tags_in_use': ['abc123', 'def456'],  # Tags currently deployed
+                    'tags_to_keep': ['xyz789', ...],       # Recent tags to keep
+                    'tags_to_delete': [                    # Tags that can be deleted
+                        {'tag': 'old123', 'created_at': datetime(...), 'age_days': 45},
+                        ...
+                    ],
+                    'total_deletable': 10,
+                    'estimated_cleanup_gb': 2.5  # Estimated space saved (if available)
+                }
+            }
+        """
+        cleanup_recommendations = {}
+
+        # Group images by OCIR repository
+        ocir_repos = {}
+        for image in images:
+            registry, repository, tag = self.parse_image_name(image)
+
+            # Only process OCIR images
+            if not self.is_ocir_image(registry):
+                continue
+
+            repo_key = f"{registry}/{repository}"
+            if repo_key not in ocir_repos:
+                ocir_repos[repo_key] = {
+                    'registry': registry,
+                    'repository': repository,
+                    'tags_in_use': set()
+                }
+
+            ocir_repos[repo_key]['tags_in_use'].add(tag)
+
+        # For each OCIR repository, generate cleanup recommendations
+        for repo_key, repo_info in ocir_repos.items():
+            registry = repo_info['registry']
+            repository = repo_info['repository']
+            tags_in_use = repo_info['tags_in_use']
+
+            # Get all available tags
+            all_tags = self.get_image_tags(registry, repository)
+            if not all_tags:
+                continue
+
+            # Filter to commit hash tags only (exclude semver and 'latest')
+            commit_hash_tags = []
+            for tag in all_tags:
+                if tag == 'latest':
+                    continue
+
+                version = self.parse_version(tag)
+                if version.is_semver:
+                    continue
+
+                # Get creation date
+                created_at = self.get_image_creation_date(registry, repository, tag)
+                if created_at:
+                    commit_hash_tags.append({
+                        'tag': tag,
+                        'created_at': created_at,
+                        'in_use': tag in tags_in_use
+                    })
+
+            # Sort by creation date (newest first)
+            commit_hash_tags.sort(key=lambda x: x['created_at'], reverse=True)
+
+            # Determine which tags to keep and which to delete
+            tags_to_keep = []
+            tags_to_delete = []
+            non_in_use_kept = 0  # Track how many non-in-use tags we've kept
+
+            for tag_info in commit_hash_tags:
+                tag = tag_info['tag']
+                created_at = tag_info['created_at']
+                in_use = tag_info['in_use']
+
+                # Always keep tags that are currently in use
+                if in_use:
+                    tags_to_keep.append(tag)
+                # Keep the N most recent tags (excluding those in use)
+                elif non_in_use_kept < keep_count:
+                    tags_to_keep.append(tag)
+                    non_in_use_kept += 1
+                # Everything else can be deleted
+                else:
+                    age_days = (datetime.now(timezone.utc) - created_at).days
+                    tags_to_delete.append({
+                        'tag': tag,
+                        'created_at': created_at,
+                        'age_days': age_days
+                    })
+
+            # Only include repositories that have deletable tags
+            if tags_to_delete:
+                cleanup_recommendations[repo_key] = {
+                    'registry': registry,
+                    'repository': repository,
+                    'tags_in_use': sorted(tags_in_use),
+                    'tags_to_keep': sorted([t for t in tags_to_keep if t not in tags_in_use]),
+                    'tags_to_delete': tags_to_delete,
+                    'total_deletable': len(tags_to_delete)
+                }
+
+        return cleanup_recommendations

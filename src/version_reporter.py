@@ -166,3 +166,95 @@ class VersionReporter:
             logger.info(f"  - {minor_count} minor/patch updates available")
         else:
             logger.info("  - All images are up to date")
+
+
+class CleanupReporter:
+    """Generates reports for OCIR image cleanup recommendations."""
+
+    @staticmethod
+    def generate_report(cleanup_recommendations: Dict[str, Dict[str, Any]]) -> str:
+        """Generate a formatted report for OCIR image cleanup recommendations.
+
+        Args:
+            cleanup_recommendations: Dictionary of cleanup recommendations from RegistryClient
+
+        Returns:
+            Formatted report string
+        """
+        if not cleanup_recommendations:
+            return "\nNo OCIR cleanup recommendations.\n"
+
+        # Calculate totals
+        total_repos = len(cleanup_recommendations)
+        total_deletable = sum(r['total_deletable'] for r in cleanup_recommendations.values())
+
+        # Build report
+        lines = []
+        lines.append("")
+        lines.append("=" * 80)
+        lines.append("OCIR Image Cleanup Recommendations")
+        lines.append("=" * 80)
+        lines.append(f"Total repositories with cleanup candidates: {total_repos}")
+        lines.append(f"Total deletable tags across all repositories: {total_deletable}")
+        lines.append("")
+        lines.append("IMPORTANT: Keep the last 5 commit hash tags + tags currently in use")
+        lines.append("Semver tags and 'latest' tag are never recommended for deletion")
+        lines.append("")
+
+        # Detail each repository
+        for repo_key in sorted(cleanup_recommendations.keys()):
+            rec = cleanup_recommendations[repo_key]
+            repository = rec['repository']
+            tags_in_use = rec['tags_in_use']
+            tags_to_keep = rec['tags_to_keep']
+            tags_to_delete = rec['tags_to_delete']
+
+            lines.append("-" * 80)
+            lines.append(f"Repository: {repository}")
+            lines.append("-" * 80)
+            lines.append(f"Tags in use (will keep):        {len(tags_in_use)}")
+            if tags_in_use:
+                lines.append(f"  → {', '.join(tags_in_use[:10])}")
+                if len(tags_in_use) > 10:
+                    lines.append(f"    ...and {len(tags_in_use) - 10} more")
+
+            lines.append(f"Recent tags to keep:            {len(tags_to_keep)}")
+            if tags_to_keep:
+                lines.append(f"  → {', '.join(tags_to_keep[:10])}")
+                if len(tags_to_keep) > 10:
+                    lines.append(f"    ...and {len(tags_to_keep) - 10} more")
+
+            lines.append(f"Old tags recommended for deletion: {len(tags_to_delete)}")
+            if tags_to_delete:
+                # Show oldest 5 tags
+                lines.append("  Oldest tags:")
+                for tag_info in tags_to_delete[:5]:
+                    tag = tag_info['tag']
+                    age_days = tag_info['age_days']
+                    lines.append(f"    - {tag} ({age_days} days old)")
+                if len(tags_to_delete) > 5:
+                    lines.append(f"    ...and {len(tags_to_delete) - 5} more")
+            lines.append("")
+
+        lines.append("=" * 80)
+        lines.append("")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def log_summary(cleanup_recommendations: Dict[str, Dict[str, Any]]) -> None:
+        """Log a summary of cleanup recommendations.
+
+        Args:
+            cleanup_recommendations: Dictionary of cleanup recommendations
+        """
+        if not cleanup_recommendations:
+            logger.info("No OCIR cleanup recommendations")
+            return
+
+        total_repos = len(cleanup_recommendations)
+        total_deletable = sum(r['total_deletable'] for r in cleanup_recommendations.values())
+
+        logger.info("OCIR Cleanup Recommendations:")
+        logger.info(f"  - {total_repos} repositories with old tags")
+        logger.info(f"  - {total_deletable} tags recommended for deletion")

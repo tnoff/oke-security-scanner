@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **OCIR repository name normalization**
   - Fixed OCIR image repository lookups by stripping namespace prefix from repository names
-  - OCIR API expects repository names without namespace (e.g., `discord_bot` not `tnoff/discord_bot`)
+  - OCIR API expects repository names without namespace (e.g., `discord_bot` not `namespace/discord_bot`)
   - Added `normalize_ocir_repository()` method to handle namespace stripping
   - Updates `_find_repository_compartment()` and `_get_ocir_images_via_sdk()` to use normalized names
 - **Timezone-aware datetime handling**

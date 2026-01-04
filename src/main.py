@@ -13,7 +13,7 @@ from .k8s_client import KubernetesClient
 from .scanner import TrivyScanner
 from .discord_notifier import DiscordNotifier
 from .registry_client import RegistryClient
-from .version_reporter import VersionReporter
+from .version_reporter import VersionReporter, CleanupReporter
 
 
 logger = getLogger(__name__)
@@ -144,6 +144,21 @@ def main():
         else:
             logger.info("✓ All images are up to date")
 
+        # Check for cleanup recommendations (OCIR only)
+        logger.info("-" * 60)
+        logger.info("Checking for OCIR cleanup recommendations...")
+        logger.info("-" * 60)
+
+        cleanup_recommendations = registry_client.get_cleanup_recommendations(images, keep_count=5)
+
+        # Generate and display cleanup report
+        if cleanup_recommendations:
+            cleanup_report = CleanupReporter.generate_report(cleanup_recommendations)
+            print(cleanup_report)
+            CleanupReporter.log_summary(cleanup_recommendations)
+        else:
+            logger.info("✓ No cleanup recommendations")
+
         # Calculate total duration
         total_duration = time.time() - start_time
 
@@ -181,7 +196,12 @@ def main():
                     total_images=len(images),
                     update_results=update_results,
                 )
-                logger.info("✓ Discord notification sent")
+                logger.info("✓ Discord scan report sent")
+
+                # Send cleanup recommendations as a separate message
+                if cleanup_recommendations:
+                    notifier.send_cleanup_recommendations(cleanup_recommendations)
+                    logger.info("✓ Discord cleanup recommendations sent")
             except Exception as e:
                 # Webhook failure doesn't fail the scan
                 logger.warning(f"Failed to send Discord notification: {e}")

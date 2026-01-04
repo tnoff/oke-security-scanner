@@ -132,6 +132,57 @@ class DiscordNotifier:
             logger.error(f"Failed to send Discord notification: {e}")
             return False
 
+    def send_cleanup_recommendations(
+        self, cleanup_recommendations: dict[str, dict]
+    ) -> bool:
+        """Send OCIR cleanup recommendations to Discord.
+
+        Args:
+            cleanup_recommendations: Dictionary of cleanup recommendations from RegistryClient
+
+        Returns:
+            True if message sent successfully, False otherwise
+        """
+        if not cleanup_recommendations:
+            logger.debug("No cleanup recommendations to send")
+            return True
+
+        try:
+            # Calculate totals
+            total_repos = len(cleanup_recommendations)
+            total_deletable = sum(r['total_deletable'] for r in cleanup_recommendations.values())
+
+            # Build summary message
+            summary = (
+                f"OCIR Cleanup Recommendations\n"
+                f"Repositories: {total_repos} | Deletable tags: {total_deletable}\n\n"
+                f"Keep: Last 5 commit hash tags + tags in use\n"
+                f"Safe to delete: Older commit hash tags"
+            )
+
+            # Build table with cleanup details
+            table_messages = self._build_cleanup_table(cleanup_recommendations)
+
+            # Combine summary and table (may be paginated)
+            messages = [summary]
+            if table_messages:
+                messages.extend(table_messages)
+
+            # Send all cleanup messages
+            for idx, message in enumerate(messages):
+                self._send_message(message)
+
+                # Add delay between messages to avoid rate limiting
+                if idx < len(messages) - 1:
+                    time.sleep(1)
+
+            logger.info(f"Successfully sent {len(messages)} cleanup recommendation message(s)")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send cleanup recommendations: {e}")
+            return False
+
     def _build_vulnerability_table(
         self, results: list[dict], severity: str, only_with_fixes: bool = False
     ) -> list[str]:
@@ -273,6 +324,65 @@ class DiscordNotifier:
         # Return paginated messages
         if not rows:
             return []
+
+        messages = table.print()
+        if isinstance(messages, str):
+            return [messages]
+        return messages
+
+    def _build_cleanup_table(self, cleanup_recommendations: dict[str, dict]) -> list[str]:
+        """Build formatted table for cleanup recommendations.
+
+        Args:
+            cleanup_recommendations: Dictionary of cleanup recommendations
+
+        Returns:
+            List of formatted message strings (may be paginated)
+        """
+        if not cleanup_recommendations:
+            return []
+
+        # Define table headers with column widths
+        headers = DapperTableHeaderOptions([
+            DapperTableHeader("Repository", 40),
+            DapperTableHeader("In Use", 10),
+            DapperTableHeader("Keep", 10),
+            DapperTableHeader("Delete", 10),
+            DapperTableHeader("Oldest Tag (Age)", 20),
+        ])
+
+        # Create table with headers and pagination
+        table = DapperTable(
+            header_options=headers,
+            pagination_options=PaginationLength(1800),
+            prefix="OCIR Cleanup Candidates:\n",
+            enclosure_start="```",
+            enclosure_end="```",
+        )
+
+        # Collect cleanup rows
+        for repo_key in sorted(cleanup_recommendations.keys()):
+            rec = cleanup_recommendations[repo_key]
+            repository = rec['repository']
+            tags_in_use = rec['tags_in_use']
+            tags_to_keep = rec['tags_to_keep']
+            tags_to_delete = rec['tags_to_delete']
+
+            # Find oldest tag
+            oldest = "N/A"
+            if tags_to_delete:
+                # tags_to_delete is already sorted by age (newest first when created)
+                # We want the last one (oldest)
+                oldest_tag = tags_to_delete[-1]
+                oldest = f"{oldest_tag['tag'][:7]} ({oldest_tag['age_days']}d)"
+
+            table.add_row([
+                repository,
+                str(len(tags_in_use)),
+                str(len(tags_to_keep)),
+                str(len(tags_to_delete)),
+                oldest
+            ])
 
         messages = table.print()
         if isinstance(messages, str):

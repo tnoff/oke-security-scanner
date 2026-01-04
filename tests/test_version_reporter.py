@@ -170,3 +170,64 @@ class TestVersionReporter:
         # Should not raise any exceptions
         VersionReporter.log_summary(update_results)
         VersionReporter.log_summary([])
+
+
+class TestCleanupReporter:
+    """Test cases for CleanupReporter class."""
+
+    def test_generate_report_with_recommendations(self):
+        """Test generating cleanup report with recommendations."""
+        from src.version_reporter import CleanupReporter
+
+        cleanup_recommendations = {
+            'test.ocir.io/namespace/myapp': {
+                'registry': 'test.ocir.io',
+                'repository': 'namespace/myapp',
+                'tags_in_use': ['abc123', 'def456'],
+                'tags_to_keep': ['ghi789', 'jkl012'],
+                'tags_to_delete': [
+                    {'tag': 'old123', 'created_at': datetime(2024, 1, 1, tzinfo=timezone.utc), 'age_days': 365},
+                    {'tag': 'old456', 'created_at': datetime(2024, 2, 1, tzinfo=timezone.utc), 'age_days': 335},
+                ],
+                'total_deletable': 2
+            }
+        }
+
+        report = CleanupReporter.generate_report(cleanup_recommendations)
+
+        assert 'OCIR Image Cleanup Recommendations' in report
+        assert 'Total repositories with cleanup candidates: 1' in report
+        assert 'Total deletable tags across all repositories: 2' in report
+        assert 'namespace/myapp' in report
+        assert 'Tags in use (will keep):        2' in report
+        assert 'Recent tags to keep:            2' in report
+        assert 'Old tags recommended for deletion: 2' in report
+
+    def test_generate_report_no_recommendations(self):
+        """Test generating cleanup report when no recommendations."""
+        from src.version_reporter import CleanupReporter
+
+        report = CleanupReporter.generate_report({})
+
+        assert 'No OCIR cleanup recommendations' in report
+
+    def test_log_summary(self):
+        """Test log_summary doesn't crash."""
+        from src.version_reporter import CleanupReporter
+
+        cleanup_recommendations = {
+            'test.ocir.io/namespace/myapp': {
+                'registry': 'test.ocir.io',
+                'repository': 'namespace/myapp',
+                'tags_in_use': ['abc123'],
+                'tags_to_keep': ['ghi789'],
+                'tags_to_delete': [
+                    {'tag': 'old123', 'created_at': datetime(2024, 1, 1, tzinfo=timezone.utc), 'age_days': 365},
+                ],
+                'total_deletable': 1
+            }
+        }
+
+        # Should not raise any exceptions
+        CleanupReporter.log_summary(cleanup_recommendations)
+        CleanupReporter.log_summary({})
