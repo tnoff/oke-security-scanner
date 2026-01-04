@@ -5,6 +5,45 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.6] - 2026-01-04
+
+### Fixed
+- **OCIR repository name normalization**
+  - Fixed OCIR image repository lookups by stripping namespace prefix from repository names
+  - OCIR API expects repository names without namespace (e.g., `discord_bot` not `tnoff/discord_bot`)
+  - Added `normalize_ocir_repository()` method to handle namespace stripping
+  - Updates `_find_repository_compartment()` and `_get_ocir_images_via_sdk()` to use normalized names
+- **Timezone-aware datetime handling**
+  - Fixed `TypeError` when comparing timezone-aware datetimes from OCI SDK with timezone-naive datetimes
+  - Updated `age_days()` method to use `datetime.now(timezone.utc)` for proper comparisons
+  - Prevents crashes when calculating image age for OCIR images
+- **Mixed version type comparison**
+  - Fixed version comparison when repositories contain both semver tags and commit hash tags
+  - Updated `get_latest_version()` to populate creation dates for all version types
+  - When both semver and non-semver versions exist, compares by creation date to find truly latest
+  - Resolves issue where semver versions were incorrectly chosen over newer commit hash versions
+
+### Added
+- **Alternate tag display for better commit hash workflows**
+  - When current image uses commit hash and latest is semver, displays corresponding commit hash if available
+  - New `_find_alternate_tag()` method finds non-semver tags with matching creation timestamps
+  - Version reports show: `Latest: abc1234 (version 0.2.1)` instead of just `Latest: 0.2.1`
+  - Helps teams using commit-hash-based deployments identify which commit to deploy
+- **Comprehensive test coverage for OCIR fixes**
+  - 10 new tests covering repository normalization, timezone handling, and alternate tag display
+  - Tests for mixed version comparison scenarios
+  - New test suite for `version_reporter.py` module (7 tests)
+  - Code coverage improved from 66% to 74%
+  - `version_reporter.py` coverage: 11% → 90%
+
+### Changed
+- Enhanced `check_for_updates()` to include `alternate_tag` in update info
+- Updated version report formatting to handle all version type combinations:
+  - Both semver
+  - Both non-semver
+  - Non-semver → semver (with/without alternate tag)
+  - Semver → non-semver
+
 ## [0.0.5] - 2025-12-31
 
 ### Added
