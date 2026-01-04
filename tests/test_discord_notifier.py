@@ -302,3 +302,70 @@ class TestDiscordNotifier:
         assert "CRITICAL" in lines[2]
         assert "HIGH" in lines[3]
         assert "MEDIUM" in lines[4]
+
+    def test_generate_csv_with_cleanup_recommendations(self, notifier, sample_scan_results):
+        """Test CSV generation includes cleanup recommendations section."""
+        from datetime import datetime, timezone
+
+        cleanup_recommendations = {
+            'test.ocir.io/namespace/myapp': {
+                'registry': 'test.ocir.io',
+                'repository': 'namespace/myapp',
+                'tags_in_use': ['commit0', 'commit1'],
+                'tags_to_keep': ['commit2', 'commit3', 'commit4'],
+                'tags_to_delete': [
+                    {
+                        'tag': 'commit5',
+                        'created_at': datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+                        'age_days': 365
+                    },
+                    {
+                        'tag': 'commit6',
+                        'created_at': datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+                        'age_days': 200
+                    },
+                ],
+                'total_deletable': 2
+            }
+        }
+
+        csv_data = notifier._generate_csv(
+            sample_scan_results,
+            update_results=None,
+            cleanup_recommendations=cleanup_recommendations
+        )
+
+        # Verify cleanup section header
+        assert "=== OCIR CLEANUP RECOMMENDATIONS ===" in csv_data
+        assert "Repository,Tag,Created Date,Age (days),Status" in csv_data
+
+        # Verify tags in use
+        assert "commit0" in csv_data
+        assert "commit1" in csv_data
+        assert "In Use - Keep" in csv_data
+
+        # Verify tags to keep
+        assert "commit2" in csv_data
+        assert "commit3" in csv_data
+        assert "commit4" in csv_data
+        assert "Recent - Keep" in csv_data
+
+        # Verify tags to delete
+        assert "commit5" in csv_data
+        assert "commit6" in csv_data
+        assert "Old - Can Delete" in csv_data
+        assert "2024-01-01 12:00:00 UTC" in csv_data
+        assert "365" in csv_data
+        assert "200" in csv_data
+
+    def test_generate_csv_without_cleanup_recommendations(self, notifier, sample_scan_results):
+        """Test CSV generation without cleanup recommendations."""
+        csv_data = notifier._generate_csv(
+            sample_scan_results,
+            update_results=None,
+            cleanup_recommendations=None
+        )
+
+        # Verify cleanup section is NOT included
+        assert "=== OCIR CLEANUP RECOMMENDATIONS ===" not in csv_data
+        assert "Old - Can Delete" not in csv_data
