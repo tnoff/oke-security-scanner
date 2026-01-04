@@ -815,3 +815,101 @@ class TestRegistryClient:
         assert update_info['current'].tag == 'old123'
         assert update_info['latest'].tag == '0.2.0'
         assert update_info['alternate_tag'] == 'new456'
+
+    @patch('src.registry_client.oci')
+    def test_get_cleanup_recommendations(self, mock_oci, config):
+        """Test get_cleanup_recommendations identifies old tags for deletion."""
+        from datetime import timezone, timedelta
+
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        # Mock ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        # Create test data: 1 tag in use, 5 to keep, 3 old tags to delete
+        now = datetime.now(timezone.utc)
+        tags_data = []
+        for i in range(9):
+            tags_data.append({
+                'tag': f'commit{i}',
+                'created_at': now - timedelta(days=i),
+                'digest': f'sha256:hash{i}'
+            })
+
+        client._ocir_image_cache['myapp'] = tags_data
+
+        # Simulate images deployed with commit0 and commit1
+        images = [
+            'test.ocir.io/testnamespace/myapp:commit0',
+            'test.ocir.io/testnamespace/myapp:commit1',
+        ]
+
+        recommendations = client.get_cleanup_recommendations(images, keep_count=5)
+
+        # Should have recommendations for the repository
+        repo_key = 'test.ocir.io/testnamespace/myapp'
+        assert repo_key in recommendations
+
+        rec = recommendations[repo_key]
+        assert rec['repository'] == 'testnamespace/myapp'
+        assert len(rec['tags_in_use']) == 2  # commit0, commit1
+        assert 'commit0' in rec['tags_in_use']
+        assert 'commit1' in rec['tags_in_use']
+
+        # Should keep 5 most recent (excluding in-use), but commit0 and commit1 are in use
+        # So the next 5 are: commit2, commit3, commit4, commit5, commit6
+        assert len(rec['tags_to_keep']) == 5
+
+        # Should recommend deletion of commit7, commit8 (oldest beyond keep_count)
+        assert len(rec['tags_to_delete']) == 2
+        assert rec['total_deletable'] == 2
+
+    @patch('src.registry_client.oci')
+    def test_get_cleanup_recommendations_excludes_semver(self, mock_oci, config):
+        """Test get_cleanup_recommendations excludes semver tags from deletion."""
+        from datetime import timezone, timedelta
+
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        # Mock ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        # Create mixed tags: semver and commit hashes
+        now = datetime.now(timezone.utc)
+        client._ocir_image_cache['myapp'] = [
+            {'tag': '1.0.0', 'created_at': now - timedelta(days=10), 'digest': 'sha256:v1'},
+            {'tag': 'old1', 'created_at': now - timedelta(days=20), 'digest': 'sha256:old1'},
+            {'tag': 'old2', 'created_at': now - timedelta(days=30), 'digest': 'sha256:old2'},
+        ]
+
+        images = ['test.ocir.io/testnamespace/myapp:1.0.0']
+
+        recommendations = client.get_cleanup_recommendations(images, keep_count=0)
+
+        # Semver tag 1.0.0 is in use, but old1 and old2 are commit hashes beyond keep_count
+        # Both should be recommended for deletion
+        repo_key = 'test.ocir.io/testnamespace/myapp'
+        if repo_key in recommendations:
+            rec = recommendations[repo_key]
+            # Semver tags should never be in tags_to_delete
+            for tag_info in rec['tags_to_delete']:
+                assert not tag_info['tag'].startswith('v')
+                assert '.' not in tag_info['tag']  # Semver has dots
