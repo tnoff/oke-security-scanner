@@ -31,6 +31,7 @@ class DiscordNotifier:
         duration: float,
         total_images: int,
         update_results: list[dict] | None = None,
+        cleanup_recommendations: dict[str, dict] | None = None,
     ) -> bool:
         """Send formatted scan results to Discord.
 
@@ -41,6 +42,7 @@ class DiscordNotifier:
             duration: Scan duration in seconds
             total_images: Total number of images scanned
             update_results: Optional list of image update results
+            cleanup_recommendations: Optional dictionary of cleanup recommendations
 
         Returns:
             True if all messages sent successfully, False otherwise
@@ -58,8 +60,8 @@ class DiscordNotifier:
                         else:
                             minor_patch_count += 1
 
-            # Generate CSV with all vulnerabilities and version updates
-            csv_data = self._generate_csv(scan_results, update_results)
+            # Generate CSV with all vulnerabilities, version updates, and cleanup recommendations
+            csv_data = self._generate_csv(scan_results, update_results, cleanup_recommendations)
 
             # === MESSAGE BLOCK 1: Vulnerability Scan Results ===
             vuln_summary = (
@@ -389,12 +391,18 @@ class DiscordNotifier:
             return [messages]
         return messages
 
-    def _generate_csv(self, results: list[dict], update_results: list[dict] | None = None) -> str:
-        """Generate CSV data for all vulnerabilities and version updates.
+    def _generate_csv(
+        self,
+        results: list[dict],
+        update_results: list[dict] | None = None,
+        cleanup_recommendations: dict[str, dict] | None = None
+    ) -> str:
+        """Generate CSV data for all vulnerabilities, version updates, and cleanup recommendations.
 
         Args:
             results: List of scan result dictionaries
             update_results: Optional list of update result dictionaries
+            cleanup_recommendations: Optional dictionary of cleanup recommendations
 
         Returns:
             CSV data as a string
@@ -478,6 +486,40 @@ class DiscordNotifier:
 
             # Write update rows
             for row in update_rows:
+                writer.writerow(row)
+
+        # Section 3: Cleanup Recommendations
+        if cleanup_recommendations:
+            writer.writerow([])  # Blank row separator
+            writer.writerow(["=== OCIR CLEANUP RECOMMENDATIONS ==="])
+            writer.writerow(["Repository", "Tag", "Created Date", "Age (days)", "Status"])
+
+            cleanup_rows = []
+            for repo_key in sorted(cleanup_recommendations.keys()):
+                rec = cleanup_recommendations[repo_key]
+                repository = rec['repository']
+                tags_in_use = rec['tags_in_use']
+                tags_to_keep = rec['tags_to_keep']
+                tags_to_delete = rec['tags_to_delete']
+
+                # Add tags in use
+                for tag in sorted(tags_in_use):
+                    cleanup_rows.append([repository, tag, "N/A", "N/A", "In Use - Keep"])
+
+                # Add recent tags to keep
+                for tag in sorted(tags_to_keep):
+                    cleanup_rows.append([repository, tag, "N/A", "N/A", "Recent - Keep"])
+
+                # Add old tags recommended for deletion
+                for tag_info in tags_to_delete:
+                    tag = tag_info['tag']
+                    created_at = tag_info['created_at']
+                    age_days = tag_info['age_days']
+                    created_str = created_at.strftime('%Y-%m-%d %H:%M:%S UTC')
+                    cleanup_rows.append([repository, tag, created_str, str(age_days), "Old - Can Delete"])
+
+            # Write cleanup rows
+            for row in cleanup_rows:
                 writer.writerow(row)
 
         return output.getvalue()

@@ -195,6 +195,7 @@ def main():
                     duration=total_duration,
                     total_images=len(images),
                     update_results=update_results,
+                    cleanup_recommendations=cleanup_recommendations,
                 )
                 logger.info("✓ Discord scan report sent")
 
