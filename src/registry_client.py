@@ -4,7 +4,7 @@ import re
 from logging import getLogger
 from typing import Optional, Tuple
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 from opentelemetry import trace
@@ -50,7 +50,9 @@ class ImageVersion:
     def age_days(self) -> Optional[int]:
         """Calculate age in days from creation date."""
         if self.created_at:
-            return (datetime.now() - self.created_at).days
+            # Use timezone-aware datetime for comparison
+            now = datetime.now(timezone.utc)
+            return (now - self.created_at).days
         return None
 
 
@@ -526,22 +528,32 @@ class RegistryClient:
         for tag in tags:
             version = self.parse_version(tag)
 
+            # Get creation date for all versions (needed for comparison)
+            created_at = self.get_image_creation_date(registry, repository, tag)
+            if created_at:
+                version.created_at = created_at
+
             if version.is_semver:
                 semver_versions.append(version)
-            else:
-                # For non-semver tags, get creation date
-                created_at = self.get_image_creation_date(registry, repository, tag)
-                if created_at:
-                    version.created_at = created_at
-                    dated_versions.append(version)
+            elif created_at:
+                # Only add non-semver if it has a creation date
+                dated_versions.append(version)
 
-        # Prefer semver if available
-        if semver_versions:
+        # If we have only semver versions, use semver comparison
+        if semver_versions and not dated_versions:
             return max(semver_versions)
 
-        # Fall back to creation date
-        if dated_versions:
+        # If we have only dated non-semver versions, use date comparison
+        if dated_versions and not semver_versions:
             return max(dated_versions, key=lambda v: v.created_at)
+
+        # If we have both, compare by creation date to find truly latest
+        if semver_versions and dated_versions:
+            all_versions = semver_versions + dated_versions
+            # Filter to only those with creation dates
+            versions_with_dates = [v for v in all_versions if v.created_at]
+            if versions_with_dates:
+                return max(versions_with_dates, key=lambda v: v.created_at)
 
         return None
 
