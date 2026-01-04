@@ -702,3 +702,116 @@ class TestRegistryClient:
         assert update_info['current'].tag == 'old123'
         assert update_info['latest'].tag == '0.2.0'
         assert update_info['latest'].is_semver is True
+
+    @patch('src.registry_client.oci')
+    def test_find_alternate_tag_finds_matching_hash(self, mock_oci, config):
+        """Test _find_alternate_tag finds commit hash with matching timestamp."""
+        from datetime import timezone, timedelta
+
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        # Mock ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        # Create test data with semver and commit hash having same timestamp
+        target_date = datetime.now(timezone.utc) - timedelta(days=3)
+        other_date = datetime.now(timezone.utc) - timedelta(days=5)
+
+        client._ocir_image_cache['myapp'] = [
+            {'tag': '0.2.0', 'created_at': target_date, 'digest': 'sha256:abc'},
+            {'tag': 'abc123', 'created_at': target_date, 'digest': 'sha256:abc'},  # Same timestamp
+            {'tag': 'def456', 'created_at': other_date, 'digest': 'sha256:def'},
+        ]
+
+        registry = 'test.ocir.io'
+        repository = 'testnamespace/myapp'
+        tags = ['0.2.0', 'abc123', 'def456']
+
+        # Should find abc123 as it matches the target date
+        alternate = client._find_alternate_tag(registry, repository, tags, target_date)
+
+        assert alternate == 'abc123'
+
+    @patch('src.registry_client.oci')
+    def test_find_alternate_tag_returns_none_when_no_match(self, mock_oci, config):
+        """Test _find_alternate_tag returns None when no matching hash exists."""
+        from datetime import timezone, timedelta
+
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        # Mock ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        # Create test data with no matching timestamps
+        target_date = datetime.now(timezone.utc) - timedelta(days=3)
+        other_date = datetime.now(timezone.utc) - timedelta(days=5)
+
+        client._ocir_image_cache['myapp'] = [
+            {'tag': '0.2.0', 'created_at': target_date, 'digest': 'sha256:abc'},
+            {'tag': 'abc123', 'created_at': other_date, 'digest': 'sha256:def'},  # Different timestamp
+        ]
+
+        registry = 'test.ocir.io'
+        repository = 'testnamespace/myapp'
+        tags = ['0.2.0', 'abc123']
+
+        # Should return None as no commit hash has matching timestamp
+        alternate = client._find_alternate_tag(registry, repository, tags, target_date)
+
+        assert alternate is None
+
+    @patch('src.registry_client.oci')
+    def test_check_for_updates_includes_alternate_tag(self, mock_oci, config):
+        """Test check_for_updates includes alternate_tag for non-semver to semver updates."""
+        from datetime import timezone, timedelta
+
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        # Mock ServiceError exception class
+        class ServiceError(Exception):
+            def __init__(self, status, message):
+                super().__init__(message)
+                self.status = status
+                self.message = message
+        mock_oci.exceptions.ServiceError = ServiceError
+
+        client = RegistryClient(config)
+
+        # Old commit hash and new semver with matching commit hash
+        old_date = datetime.now(timezone.utc) - timedelta(days=10)
+        new_date = datetime.now(timezone.utc) - timedelta(days=2)
+
+        client._ocir_image_cache['myapp'] = [
+            {'tag': 'old123', 'created_at': old_date, 'digest': 'sha256:old'},
+            {'tag': '0.2.0', 'created_at': new_date, 'digest': 'sha256:new'},
+            {'tag': 'new456', 'created_at': new_date, 'digest': 'sha256:new'},  # Matching hash
+        ]
+
+        image = 'test.ocir.io/testnamespace/myapp:old123'
+        update_info = client.check_for_updates(image)
+
+        # Should include alternate_tag in the response
+        assert update_info is not None
+        assert update_info['current'].tag == 'old123'
+        assert update_info['latest'].tag == '0.2.0'
+        assert update_info['alternate_tag'] == 'new456'

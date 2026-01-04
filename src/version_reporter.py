@@ -94,6 +94,7 @@ class VersionReporter:
 
         # Format based on version type
         if current.is_semver and latest.is_semver:
+            # Both are semver versions
             lines.append(f"Current: {current.to_string()} (tag: {current.tag})")
             lines.append(f"Latest:  {latest.to_string()} (tag: {latest.tag})")
 
@@ -109,8 +110,27 @@ class VersionReporter:
             else:
                 lines.append(f"Change:  +{patch_diff} patch")
 
+        elif not current.is_semver and latest.is_semver:
+            # Current is commit hash, latest is semver
+            lines.append(f"Current: {current.tag}")
+
+            # If we have an alternate commit hash tag for the semver, show it
+            alternate_tag = update_info.get("alternate_tag")
+            if alternate_tag:
+                lines.append(f"Latest:  {alternate_tag} (version {latest.to_string()})")
+            else:
+                lines.append(f"Latest:  {latest.tag} (version {latest.to_string()})")
+
+            if current.created_at and latest.created_at:
+                current_age = current.age_days()
+                latest_age = latest.age_days()
+                age_diff = current_age - latest_age
+
+                lines.append(f"Age:     Current is {current_age} days old, latest is {latest_age} days old")
+                lines.append(f"Change:  Update is {age_diff} days newer")
+
         else:
-            # Non-semver (commit hash) comparison
+            # Both non-semver OR current is semver and latest is non-semver
             lines.append(f"Current: {current.tag}")
             lines.append(f"Latest:  {latest.tag}")
 

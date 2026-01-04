@@ -557,6 +557,34 @@ class RegistryClient:
 
         return None
 
+    def _find_alternate_tag(self, registry: str, repository: str, tags: list[str], target_date: datetime) -> Optional[str]:
+        """Find a non-semver tag with the same creation timestamp.
+
+        When displaying updates, if the latest is a semver tag but the current is a commit hash,
+        this finds a commit hash tag that corresponds to the same image (same creation date).
+
+        Args:
+            registry: Registry hostname
+            repository: Repository name
+            tags: List of available tags
+            target_date: Creation date to match
+
+        Returns:
+            Non-semver tag with matching creation date, or None
+        """
+        for tag in tags:
+            version = self.parse_version(tag)
+            # Skip semver tags, we're looking for commit hashes
+            if version.is_semver:
+                continue
+
+            created_at = self.get_image_creation_date(registry, repository, tag)
+            if created_at and created_at == target_date:
+                logger.debug(f"Found alternate tag {tag} for timestamp {target_date}")
+                return tag
+
+        return None
+
     def check_for_updates(self, image: str) -> Optional[dict]:
         """Check if a newer version exists for the given image.
 
@@ -624,6 +652,14 @@ class RegistryClient:
                     minor_diff = latest_version.minor - current_version.minor
                     patch_diff = latest_version.patch - current_version.patch
 
+                # If current is non-semver and latest is semver, try to find a commit hash
+                # tag with the same timestamp as the semver (for better display)
+                alternate_tag = None
+                if not current_version.is_semver and latest_version.is_semver and latest_version.created_at:
+                    alternate_tag = self._find_alternate_tag(
+                        registry, repository, available_tags, latest_version.created_at
+                    )
+
                 span.set_attribute("update.available", True)
                 span.set_attribute("update.is_major", is_major_update)
                 span.set_attribute("update.current_version", current_version.to_string())
@@ -632,6 +668,7 @@ class RegistryClient:
                 return {
                     "current": current_version,
                     "latest": latest_version,
+                    "alternate_tag": alternate_tag,
                     "is_major_update": is_major_update,
                     "major_diff": major_diff,
                     "minor_diff": minor_diff,
