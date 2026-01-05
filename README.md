@@ -7,6 +7,7 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 - 🔍 **Automatic Discovery** - Queries Kubernetes API to find all deployed images
 - 🛡️ **Trivy Scanner** - Industry-standard vulnerability scanner with daily DB updates
 - 🔄 **Version Update Detection** - Identifies outdated images (semver & commit hash) across multiple registries
+- 🧹 **OCIR Cleanup** - Automatically identifies and optionally deletes old commit hash tags
 - 📊 **OTLP Observability** - Sends logs, traces, and metrics to your LGTM stack
 - 🔐 **Multi-Registry Support** - Works with OCIR, Docker Hub, and GitHub Container Registry
 - 🎯 **Namespace Filtering** - Scan specific namespaces or exclude system namespaces
@@ -36,7 +37,12 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 │   │  │    - Compare versions │   │   │
 │   │  └───────────────────────┘   │   │
 │   │  ┌───────────────────────┐   │   │
-│   │  │ 5. Send OTLP          │   │   │
+│   │  │ 5. OCIR Cleanup       │   │   │
+│   │  │    - Find old tags    │   │   │
+│   │  │    - Delete (optional)│   │   │
+│   │  └───────────────────────┘   │   │
+│   │  ┌───────────────────────┐   │   │
+│   │  │ 6. Send OTLP          │   │   │
 │   │  │    - Logs (Loki)      │   │   │
 │   │  │    - Traces (Tempo)   │   │   │
 │   │  │    - Metrics (Mimir)  │   │   │
@@ -48,10 +54,16 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 ## Prerequisites
 
 - Kubernetes cluster (OKE)
-- **OCI SDK Configuration**: For OCIR image version checking, the scanner requires OCI credentials configured at `~/.oci/config` or via environment variables
-  - Required for: Listing OCIR images and checking version updates
+- **OCI SDK Configuration**: For OCIR image version checking and cleanup, the scanner requires OCI credentials configured at `~/.oci/config` or via environment variables
+  - Required for: Listing OCIR images, checking version updates, and deleting old tags
   - Authentication methods: API key, instance principal, or resource principal
   - See [OCI SDK Configuration](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/sdkconfig.htm) for setup details
+- **OCI IAM Permissions**: The OCI user/principal requires these permissions:
+  - `inspect compartments in tenancy` - Required to search for repositories across compartments
+  - `manage repos in compartment <compartment-name>` - Required for each compartment containing OCIR repositories
+    - Enables listing images and version checking
+    - Enables deleting old image tags when OCIR cleanup is enabled
+  - See [OCI IAM Policies](https://docs.oracle.com/en-us/iaas/Content/Registry/Concepts/registrypolicyreference.htm) for OCIR policy reference
 - OTLP collector endpoint (Tempo for traces, Loki for logs, Mimir for metrics)
 - Kubernetes RBAC permissions to read pods and namespaces
 
@@ -126,6 +138,8 @@ All configuration is provided via Kubernetes secrets as environment variables:
 | `SCAN_NAMESPACES` | ❌ | (all) | Comma-separated namespaces to scan |
 | `EXCLUDE_NAMESPACES` | ❌ | `kube-system,...` | Namespaces to exclude |
 | `DISCORD_WEBHOOK_URL` | ❌ | (disabled) | Discord webhook URL for scan notifications |
+| `OCIR_CLEANUP_ENABLED` | ❌ | `false` | Enable automatic deletion of old OCIR commit hash tags |
+| `OCIR_CLEANUP_KEEP_COUNT` | ❌ | `5` | Number of recent commit hash tags to keep per repository |
 
 ### CronJob Schedule
 
@@ -194,13 +208,13 @@ Create dashboards showing:
 
 ## Discord Notifications
 
-The scanner sends comprehensive scan results to Discord via webhooks in **two message blocks**. This is optional and enabled when `DISCORD_WEBHOOK_URL` is configured.
+The scanner sends comprehensive scan results to Discord via webhooks in **up to three message blocks**. This is optional and enabled when `DISCORD_WEBHOOK_URL` is configured.
 
 ### Message Block 1: Vulnerability Scan Results
 
 - **Summary**: Scan duration, image count, vulnerability counts
 - **Critical Vulnerabilities Table**: Shows CRITICAL CVEs with available fixes
-- **CSV Attachment**: Complete vulnerability and version update report
+- **CSV Attachment**: Complete report with vulnerabilities, version updates, and OCIR cleanup recommendations
 
 ### Message Block 2: Version Update Results
 
@@ -208,12 +222,19 @@ The scanner sends comprehensive scan results to Discord via webhooks in **two me
 - **Minor/Patch Updates Table**: Non-breaking updates for easy deployment
 - **Note**: MAJOR updates excluded from message (see CSV for full report)
 
+### Message Block 3: OCIR Cleanup Recommendations
+
+- **Cleanup Summary**: Repositories with deletable tags and total count
+- **Cleanup Table**: Shows tags in use, tags to keep, tags to delete, and oldest tag age
+- **Note**: Sent as a separate message after version updates
+
 ### Features
 
-- Two separate message blocks for clarity (vulnerabilities, then updates)
+- Up to three separate message blocks for clarity (vulnerabilities, updates, cleanup)
 - Critical vulnerabilities **with available fixes** displayed for immediate action
 - Version updates categorized as MAJOR, Minor, Patch, or Commit Hash
-- CSV includes **both** vulnerabilities and version updates in separate sections
+- OCIR cleanup recommendations showing deletable tags with age information
+- CSV includes vulnerabilities, version updates, **and** cleanup recommendations in separate sections
 - Semver parsing for proper version comparison (v1.2.3 format)
 - Commit hash comparison by image creation date
 - Multi-registry support (OCIR, Docker Hub, GitHub Container Registry)
@@ -265,6 +286,77 @@ backup-tool:abc123            || abc123         || def456         || newer```
 **CSV Sections:**
 - **Vulnerabilities**: All CVEs with severity and fix information
 - **Version Updates**: All updates (MAJOR + minor/patch) with age and version diff
+- **OCIR Cleanup Recommendations**: All deletable tags with creation date, age, and status (In Use, Keep, or Can Delete)
+
+## OCIR Cleanup
+
+The scanner can identify and optionally delete old commit hash tags from OCIR repositories to save storage space. This feature is **disabled by default** and requires explicit configuration.
+
+### How It Works
+
+1. **Identification**: For each OCIR repository, the scanner:
+   - Identifies all commit hash tags (non-semver tags)
+   - Excludes tags currently in use by deployed containers
+   - Keeps the N most recent commit hash tags (default: 5)
+   - Marks older commit hash tags for deletion
+   - **Never** deletes semver tags or the 'latest' tag
+
+2. **Reporting**: Cleanup recommendations are:
+   - Logged to console with repository, tag count, and oldest tag age
+   - Included in Discord notifications as a separate message block
+   - Exported in the CSV file with full tag details
+
+3. **Deletion** (optional): When `OCIR_CLEANUP_ENABLED=true`:
+   - Automatically deletes tags marked for cleanup
+   - Logs success/failure for each deletion
+   - Reports summary of deleted and failed tags
+
+### Configuration
+
+Enable cleanup by adding these environment variables to your Kubernetes secret:
+
+```bash
+kubectl create secret generic security-scanner-secrets \
+  --from-literal=OCIR_CLEANUP_ENABLED="true" \
+  --from-literal=OCIR_CLEANUP_KEEP_COUNT="5" \
+  # ... other configuration ...
+```
+
+### Safety Features
+
+- **Disabled by default** - Requires explicit `OCIR_CLEANUP_ENABLED=true`
+- **Never deletes semver tags** - Only commit hash tags are candidates for cleanup
+- **Preserves in-use tags** - Tags currently deployed in the cluster are always kept
+- **Keeps recent tags** - The N most recent commit hash tags are preserved
+- **Detailed logging** - Every deletion attempt is logged with success/failure status
+- **Non-blocking** - Deletion failures are logged but don't stop the scan
+
+### Example Output
+
+**Console Log:**
+```
+Checking for OCIR cleanup recommendations...
+✓ Found 3 repositories with old tags
+
+OCIR Cleanup Recommendations
+Repository: namespace/myapp
+  Tags in use (will keep):        2
+  Recent tags to keep:            5
+  Old tags recommended for deletion: 8
+  Oldest tags:
+    - abc1234 (365 days old)
+    - def5678 (340 days old)
+    ...
+
+OCIR cleanup enabled - deleting old images...
+Deleting namespace/myapp:abc1234 (age: 365 days)
+  └─ ✓ Successfully deleted namespace/myapp:abc1234
+Deletion complete: 8 images deleted, 0 failed
+```
+
+### Required Permissions
+
+To enable OCIR cleanup, the OCI user/principal must have the `manage repos in compartment <name>` permission for each compartment containing OCIR repositories. See the Prerequisites section for full IAM policy details.
 
 ## Development
 

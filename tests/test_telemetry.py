@@ -62,6 +62,8 @@ class TestTelemetry:
             namespaces=[],
             exclude_namespaces=[],
             discord_webhook_url="",
+            ocir_cleanup_enabled=False,
+            ocir_cleanup_keep_count=5,
         )
 
         trace_provider, meter_provider, logger_provider = setup_telemetry(config)
@@ -118,6 +120,8 @@ class TestTelemetry:
             namespaces=[],
             exclude_namespaces=[],
             discord_webhook_url="",
+            ocir_cleanup_enabled=False,
+            ocir_cleanup_keep_count=5,
         )
 
         setup_telemetry(config)

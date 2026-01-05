@@ -27,6 +27,8 @@ class TestKubernetesClient:
             namespaces=["default", "production"],
             exclude_namespaces=["kube-system", "kube-public"],
             discord_webhook_url="",
+            ocir_cleanup_enabled=False,
+            ocir_cleanup_keep_count=5,
         )
 
     @pytest.fixture
@@ -75,6 +77,8 @@ class TestKubernetesClient:
             namespaces=[],  # Empty - discover all
             exclude_namespaces=["kube-system"],
             discord_webhook_url="",
+            ocir_cleanup_enabled=False,
+            ocir_cleanup_keep_count=5,
         )
 
         with patch('src.k8s_client.config.load_incluster_config'), \

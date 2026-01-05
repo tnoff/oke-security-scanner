@@ -12,8 +12,9 @@ This document provides context for AI agents (Claude, GPT, etc.) working on this
 3. Pulls images from Oracle Container Image Registry (OCIR) using provided credentials
 4. Scans images with Trivy for vulnerabilities
 5. Checks for image version updates across multiple registries (OCIR, Docker Hub, GitHub Container Registry)
-6. Exports observability data (logs, traces, metrics) via OpenTelemetry Protocol (OTLP)
-7. Sends Discord notifications with vulnerability and version update reports
+6. Identifies old OCIR commit hash tags for cleanup and optionally deletes them
+7. Exports observability data (logs, traces, metrics) via OpenTelemetry Protocol (OTLP)
+8. Sends Discord notifications with vulnerability, version update, and cleanup reports
 
 **Target Environment:**
 - Oracle Kubernetes Engine (OKE)
@@ -163,8 +164,10 @@ oke-security-scanner/
 6. Scan each image for vulnerabilities
 7. Check for version updates across registries
 8. Generate version update report
-9. Send Discord notifications (if configured)
-10. Exit with code 1 if critical vulnerabilities found, 0 otherwise
+9. Identify OCIR cleanup recommendations
+10. Delete old OCIR images (if OCIR_CLEANUP_ENABLED=true)
+11. Send Discord notifications (if configured)
+12. Exit with code 1 if critical vulnerabilities found, 0 otherwise
 
 **Note:** Root span (`security-scan`) only created if traces are enabled. When disabled, operations still traced via NoOpTracer (safe, no-op).
 
@@ -215,6 +218,8 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 - `SCAN_NAMESPACES` - Comma-separated namespaces to scan (optional)
 - `EXCLUDE_NAMESPACES` - Namespaces to exclude (default: kube-system,kube-public,kube-node-lease)
 - `DISCORD_WEBHOOK_URL` - Discord webhook URL for scan notifications (optional)
+- `OCIR_CLEANUP_ENABLED` - Enable automatic deletion of old OCIR commit hash tags (default: false)
+- `OCIR_CLEANUP_KEEP_COUNT` - Number of recent commit hash tags to keep per repository (default: 5)
 
 **Validation:** The `validate()` method checks required fields are present.
 
@@ -229,6 +234,9 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 - `parse_version(tag)` - Parses semver or commit hash tags
 - `get_latest_version(registry, repository, tags)` - Determines latest available version
 - `_get_ocir_images_via_sdk(repository)` - Fetches OCIR images using OCI SDK with caching
+- `get_cleanup_recommendations(images, keep_count)` - Identifies old OCIR commit hash tags for deletion
+- `delete_ocir_images(cleanup_recommendations)` - Deletes old OCIR images by OCID
+- `_delete_repository_tags(repository, tags_to_delete)` - Helper for deleting tags from a single repository
 
 **Supported registries:**
 - **OCIR**: Oracle Container Image Registry (authenticated via OCI SDK with config file)
@@ -259,42 +267,61 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 - Keyed by repository name
 - Reduces API calls for version checking (single call per repository)
 
-### src/version_reporter.py
-**Purpose:** Generate formatted reports for image version updates
+**OCIR Cleanup:**
+- `get_cleanup_recommendations()` identifies old commit hash tags for deletion
+- Preserves: tags in use, last N commit hash tags (configurable via `keep_count`), semver tags, 'latest' tag
+- Returns dict mapping repository names to cleanup info (tags_in_use, tags_to_keep, tags_to_delete)
+- `delete_ocir_images()` deletes tags by OCID using `artifacts_client.delete_container_image()`
+- `_delete_repository_tags()` handles deletion for a single repository (finds OCIDs, deletes, logs results)
+- Deletion is disabled by default (requires `OCIR_CLEANUP_ENABLED=true`)
 
-**Key methods:**
+### src/version_reporter.py
+**Purpose:** Generate formatted reports for image version updates and OCIR cleanup recommendations
+
+**VersionReporter class:**
 - `generate_report(update_results)` - Creates formatted console report with MAJOR and minor/patch sections
 - `log_summary(update_results)` - Logs summary of update check results
 - `_format_update_entry(result)` - Formats individual update entry with version diff
 
+**CleanupReporter class:**
+- `generate_report(cleanup_recommendations)` - Creates formatted console report for OCIR cleanup
+- `log_summary(cleanup_recommendations)` - Logs summary of cleanup recommendations
+- Shows repository name, tag counts (in use, to keep, deletable), and oldest tags with age
+
 **Report structure:**
 - **MAJOR VERSION UPDATES**: Breaking changes expected (sorted by image)
 - **Minor/Patch Version Updates**: Non-breaking updates (sorted by image)
+- **OCIR Cleanup Recommendations**: Old tags to delete with age information (sorted by repository)
 - Shows current vs latest version, version differences, and age for commit hashes
 
 ### src/discord_notifier.py
-**Purpose:** Send scan result notifications to Discord webhooks in two message blocks
+**Purpose:** Send scan result notifications to Discord webhooks in up to three message blocks
 
 **Key methods:**
-- `send_scan_report(scan_results, total_critical, total_high, duration, total_images, update_results)` - Sends two-block notification with CSV
+- `send_scan_report(scan_results, total_critical, total_high, duration, total_images, update_results, cleanup_recommendations)` - Sends notification with CSV
+- `send_cleanup_recommendations(cleanup_recommendations)` - Sends cleanup report as separate message
 - `_build_vulnerability_table(results, severity, only_with_fixes)` - Creates formatted table for specific severity level
 - `_build_update_table(update_results, only_minor_patch)` - Creates formatted table for version updates
-- `_generate_csv(results, update_results)` - Generates CSV with both vulnerabilities and version updates
+- `_build_cleanup_table(cleanup_recommendations)` - Creates formatted table for cleanup recommendations
+- `_generate_csv(results, update_results, cleanup_recommendations)` - Generates CSV with vulnerabilities, version updates, and cleanup
 - `_send_message(content, csv_file)` - Sends message via webhook with optional file attachment
 
 **Message flow:**
 1. **Block 1 - Vulnerability Results:**
-   - Message 1: Summary with CSV attachment (vulnerabilities + version updates)
+   - Message 1: Summary with CSV attachment (vulnerabilities + version updates + cleanup)
    - Message 2: CRITICAL vulnerabilities table (fixes only)
 2. **Block 2 - Version Update Results:**
    - Message 3: Update summary (minor/patch and major counts)
    - Message 4: Minor/Patch updates table (MAJOR updates excluded)
+3. **Block 3 - Cleanup Recommendations** (if any):
+   - Message 5: Cleanup summary and table with repository details
 
 **Features:**
-- Two separate message blocks for clarity (vulnerabilities, then version updates)
+- Up to three separate message blocks for clarity (vulnerabilities, updates, cleanup)
 - Critical vulnerabilities **with fixes** displayed for immediate action
 - Version updates categorized as MAJOR, Minor, Patch, or Commit Hash
-- CSV includes **both** vulnerabilities and version updates in separate sections
+- OCIR cleanup recommendations showing deletable tags with age information
+- CSV includes vulnerabilities, version updates, **and** cleanup recommendations in separate sections
 - Semver parsing for proper version comparison (v1.2.3 format)
 - Commit hash comparison by image creation date
 - Multi-registry support (OCIR, Docker Hub, GitHub Container Registry)
@@ -310,6 +337,10 @@ Image,CVE,Severity,Fixed Version
 
 === VERSION UPDATES ===
 Image,Current Version,Latest Version,Update Type,Age (days),Version Diff
+...
+
+=== OCIR CLEANUP RECOMMENDATIONS ===
+Repository,Tag,Created Date,Age (days),Status
 ...
 ```
 

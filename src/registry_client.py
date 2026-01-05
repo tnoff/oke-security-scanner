@@ -798,3 +798,110 @@ class RegistryClient:
                 }
 
         return cleanup_recommendations
+
+    def _delete_repository_tags(
+        self, repository: str, tags_to_delete: list[dict]
+    ) -> tuple[list[str], list[dict]]:
+        """Delete tags for a single repository.
+
+        Args:
+            repository: Full repository name (e.g., 'namespace/myapp')
+            tags_to_delete: List of tag info dicts with 'tag' and 'age_days'
+
+        Returns:
+            Tuple of (deleted_tags, failed_deletions)
+        """
+        deleted = []
+        failed = []
+
+        # Need to find the compartment for this repository
+        repo_name = self.normalize_ocir_repository(repository)
+        compartment_id = self._find_repository_compartment(repo_name)
+
+        if not compartment_id:
+            logger.warning(f"Could not find compartment for {repository}, skipping deletion")
+            return deleted, failed
+
+        # Get all images for this repository to find OCIDs
+        images_in_repo = self._get_ocir_images_via_sdk(repo_name)
+
+        for tag_info in tags_to_delete:
+            tag = tag_info['tag']
+
+            try:
+                logger.info(f"Deleting {repository}:{tag} (age: {tag_info['age_days']} days)")
+
+                # Find the image OCID for this tag
+                image_id = None
+                if images_in_repo:
+                    for img in images_in_repo:
+                        # Check if this image has the tag we want to delete
+                        if hasattr(img, 'version') and img.version == tag:
+                            image_id = img.id
+                            break
+
+                if not image_id:
+                    error_msg = f"Could not find image OCID for tag {tag}"
+                    failed.append({'tag': tag, 'error': error_msg})
+                    logger.error(f"  └─ ✗ {error_msg}")
+                    continue
+
+                # Delete the image by OCID
+                self.artifacts_client.delete_container_image(image_id)
+
+                deleted.append(tag)
+                logger.info(f"  └─ ✓ Successfully deleted {repository}:{tag}")
+
+            except Exception as e:
+                error_msg = str(e)
+                failed.append({'tag': tag, 'error': error_msg})
+                logger.error(f"  └─ ✗ Failed to delete {repository}:{tag}: {error_msg}")
+
+        return deleted, failed
+
+    def delete_ocir_images(self, cleanup_recommendations: dict[str, dict]) -> dict[str, dict]:
+        """Delete old OCIR images based on cleanup recommendations.
+
+        Args:
+            cleanup_recommendations: Dictionary of cleanup recommendations from get_cleanup_recommendations()
+
+        Returns:
+            Dictionary mapping repository names to deletion results:
+            {
+                'repository_name': {
+                    'repository': 'namespace/myapp',
+                    'deleted': ['tag1', 'tag2'],  # Successfully deleted tags
+                    'failed': [                    # Failed deletions with errors
+                        {'tag': 'tag3', 'error': 'error message'},
+                        ...
+                    ],
+                    'total_deleted': 2,
+                    'total_failed': 1
+                }
+            }
+        """
+        if not self.artifacts_client:
+            logger.warning("OCI SDK not available, cannot delete OCIR images")
+            return {}
+
+        deletion_results = {}
+
+        for repo_key, rec in cleanup_recommendations.items():
+            repository = rec['repository']
+            tags_to_delete = rec['tags_to_delete']
+
+            if not tags_to_delete:
+                continue
+
+            # Delete images for this repository
+            deleted, failed = self._delete_repository_tags(repository, tags_to_delete)
+
+            deletion_results[repo_key] = {
+                'repository': repository,
+                'deleted': deleted,
+                'failed': failed,
+                'total_deleted': len(deleted),
+                'total_failed': len(failed)
+            }
+
+        return deletion_results
