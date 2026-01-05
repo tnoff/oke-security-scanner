@@ -32,6 +32,10 @@ class Config:
     # Discord webhook configuration (optional - enabled if URL provided)
     discord_webhook_url: str
 
+    # OCIR cleanup configuration
+    ocir_cleanup_enabled: bool
+    ocir_cleanup_keep_count: int
+
     @classmethod
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
@@ -59,6 +63,10 @@ class Config:
 
             # Discord webhook configuration (optional - enabled if URL provided)
             discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", ""),
+
+            # OCIR cleanup configuration
+            ocir_cleanup_enabled=os.getenv("OCIR_CLEANUP_ENABLED", "false").lower() == "true",
+            ocir_cleanup_keep_count=int(os.getenv("OCIR_CLEANUP_KEEP_COUNT", "5")),
         )
 
     def validate(self) -> None:

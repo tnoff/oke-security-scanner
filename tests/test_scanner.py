@@ -29,6 +29,8 @@ class TestTrivyScanner:
             namespaces=[],
             exclude_namespaces=["kube-system"],
             discord_webhook_url="",
+            ocir_cleanup_enabled=False,
+            ocir_cleanup_keep_count=5,
         )
 
     @pytest.fixture

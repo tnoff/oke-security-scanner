@@ -149,13 +149,35 @@ def main():
         logger.info("Checking for OCIR cleanup recommendations...")
         logger.info("-" * 60)
 
-        cleanup_recommendations = registry_client.get_cleanup_recommendations(images, keep_count=5)
+        cleanup_recommendations = registry_client.get_cleanup_recommendations(
+            images, keep_count=config.ocir_cleanup_keep_count
+        )
 
         # Generate and display cleanup report
         if cleanup_recommendations:
             cleanup_report = CleanupReporter.generate_report(cleanup_recommendations)
             print(cleanup_report)
             CleanupReporter.log_summary(cleanup_recommendations)
+
+            # Delete old images if cleanup is enabled
+            if config.ocir_cleanup_enabled:
+                logger.info("-" * 60)
+                logger.info("OCIR cleanup enabled - deleting old images...")
+                logger.info("-" * 60)
+
+                deletion_results = registry_client.delete_ocir_images(cleanup_recommendations)
+
+                # Log deletion summary
+                total_deleted = sum(r['total_deleted'] for r in deletion_results.values())
+                total_failed = sum(r['total_failed'] for r in deletion_results.values())
+
+                logger.info(f"Deletion complete: {total_deleted} images deleted, {total_failed} failed")
+
+                if total_failed > 0:
+                    logger.warning("Some deletions failed - check logs for details")
+            else:
+                logger.info("OCIR cleanup disabled - no images will be deleted")
+                logger.info("Set OCIR_CLEANUP_ENABLED=true to enable automatic deletion")
         else:
             logger.info("✓ No cleanup recommendations")
 

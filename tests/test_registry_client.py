@@ -28,6 +28,8 @@ class TestRegistryClient:
             namespaces=[],
             exclude_namespaces=[],
             discord_webhook_url="",
+            ocir_cleanup_enabled=False,
+            ocir_cleanup_keep_count=5,
         )
 
     @patch('src.registry_client.oci')
@@ -428,6 +430,8 @@ class TestRegistryClient:
             namespaces=[],
             exclude_namespaces=[],
             discord_webhook_url="",
+            ocir_cleanup_enabled=False,
+            ocir_cleanup_keep_count=5,
         )
 
         mock_oci.config.from_file.side_effect = Exception("No config")
