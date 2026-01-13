@@ -152,6 +152,7 @@ def main():
         cleanup_recommendations = registry_client.get_cleanup_recommendations(
             images, keep_count=config.ocir_cleanup_keep_count
         )
+        deletion_results = {}
 
         # Generate and display cleanup report
         if cleanup_recommendations:
@@ -225,6 +226,18 @@ def main():
                 if cleanup_recommendations:
                     notifier.send_cleanup_recommendations(cleanup_recommendations)
                     logger.info("✓ Discord cleanup recommendations sent")
+
+                # Send deletion results if deletion was performed
+                if deletion_results:
+                    total_deleted = sum(r['total_deleted'] for r in deletion_results.values())
+                    total_failed = sum(r['total_failed'] for r in deletion_results.values())
+                    notifier.send_deletion_report(
+                        deletion_results=deletion_results,
+                        cleanup_recommendations=cleanup_recommendations,
+                        total_deleted=total_deleted,
+                        total_failed=total_failed,
+                    )
+                    logger.info("✓ Discord deletion report sent")
             except Exception as e:
                 # Webhook failure doesn't fail the scan
                 logger.warning(f"Failed to send Discord notification: {e}")
