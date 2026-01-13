@@ -185,6 +185,70 @@ class DiscordNotifier:
             logger.error(f"Failed to send cleanup recommendations: {e}")
             return False
 
+    def send_deletion_report(
+        self,
+        deletion_results: dict[str, dict],
+        cleanup_recommendations: dict[str, dict],
+        total_deleted: int,
+        total_failed: int,
+    ) -> bool:
+        """Send OCIR image deletion results to Discord.
+
+        Args:
+            deletion_results: Dictionary of deletion results from delete_ocir_images()
+            cleanup_recommendations: Dictionary of cleanup recommendations with in-use tags
+            total_deleted: Total number of images deleted across all repositories
+            total_failed: Total number of failed deletions across all repositories
+
+        Returns:
+            True if message sent successfully, False otherwise
+        """
+        if not deletion_results:
+            logger.debug("No deletion results to send")
+            return True
+
+        try:
+            # Build summary message
+            summary = (
+                f"OCIR Image Deletion Complete\n"
+                f"Deleted: {total_deleted} | Failed: {total_failed}"
+            )
+
+            # Build deletion results table
+            deletion_table_messages = self._build_deletion_table(deletion_results)
+
+            # Build in-use protection table
+            in_use_table_messages = self._build_in_use_table(cleanup_recommendations)
+
+            # Build error details table (only if there are failures)
+            error_table_messages = []
+            if total_failed > 0:
+                error_table_messages = self._build_deletion_errors_table(deletion_results)
+
+            # Combine all messages
+            messages = [summary]
+            if deletion_table_messages:
+                messages.extend(deletion_table_messages)
+            if in_use_table_messages:
+                messages.extend(in_use_table_messages)
+            if error_table_messages:
+                messages.extend(error_table_messages)
+
+            # Send all messages
+            for idx, message in enumerate(messages):
+                self._send_message(message)
+
+                # Add delay between messages to avoid rate limiting
+                if idx < len(messages) - 1:
+                    time.sleep(1)
+
+            logger.info(f"Successfully sent {len(messages)} deletion report message(s)")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send deletion report: {e}")
+            return False
+
     def _build_vulnerability_table(
         self, results: list[dict], severity: str, only_with_fixes: bool = False
     ) -> list[str]:
@@ -209,9 +273,6 @@ class DiscordNotifier:
         table = DapperTable(
             header_options=headers,
             pagination_options=PaginationLength(self.max_length),
-            prefix=f"{severity} Vulnerabilities:\n",
-            enclosure_start="```",
-            enclosure_end="```",
         )
 
         # Collect all vulnerabilities for this severity
@@ -241,11 +302,21 @@ class DiscordNotifier:
         for row in rows:
             table.add_row(row)
 
-        # Return paginated messages
+        # Return paginated messages with prefix and code blocks
         messages = table.print()
         if isinstance(messages, str):
-            return [messages]
-        return messages
+            messages = [messages]
+
+        # Add prefix and code block markers
+        formatted_messages = []
+        for idx, msg in enumerate(messages):
+            if idx == 0:
+                formatted_msg = f"{severity} Vulnerabilities:\n```\n{msg}\n```"
+            else:
+                formatted_msg = f"```\n{msg}\n```"
+            formatted_messages.append(formatted_msg)
+
+        return formatted_messages
 
     def _build_update_table(
         self, update_results: list[dict] | None, only_minor_patch: bool = False
@@ -266,7 +337,7 @@ class DiscordNotifier:
         headers = DapperTableHeaderOptions([
             DapperTableHeader("Image", 30),
             DapperTableHeader("Current", 15),
-            DapperTableHeader("Latest", 15),
+            DapperTableHeader("Latest", 25),  # Increased to show full commit hashes/tags
             DapperTableHeader("Type", 10),
         ])
 
@@ -274,9 +345,6 @@ class DiscordNotifier:
         table = DapperTable(
             header_options=headers,
             pagination_options=PaginationLength(self.max_length),
-            prefix="Minor/Patch Updates Available:\n",
-            enclosure_start="```",
-            enclosure_end="```",
         )
 
         # Collect update rows
@@ -312,7 +380,7 @@ class DiscordNotifier:
             rows.append([
                 short_name,
                 current.to_string()[:15],
-                latest.to_string()[:15],
+                latest.to_string()[:25],  # Increased to show full commit hashes/tags
                 update_type
             ])
 
@@ -329,8 +397,18 @@ class DiscordNotifier:
 
         messages = table.print()
         if isinstance(messages, str):
-            return [messages]
-        return messages
+            messages = [messages]
+
+        # Add prefix and code block markers
+        formatted_messages = []
+        for idx, msg in enumerate(messages):
+            if idx == 0:
+                formatted_msg = f"Minor/Patch Updates Available:\n```\n{msg}\n```"
+            else:
+                formatted_msg = f"```\n{msg}\n```"
+            formatted_messages.append(formatted_msg)
+
+        return formatted_messages
 
     def _build_cleanup_table(self, cleanup_recommendations: dict[str, dict]) -> list[str]:
         """Build formatted table for cleanup recommendations.
@@ -357,9 +435,6 @@ class DiscordNotifier:
         table = DapperTable(
             header_options=headers,
             pagination_options=PaginationLength(1800),
-            prefix="OCIR Cleanup Candidates:\n",
-            enclosure_start="```",
-            enclosure_end="```",
         )
 
         # Collect cleanup rows
@@ -388,8 +463,202 @@ class DiscordNotifier:
 
         messages = table.print()
         if isinstance(messages, str):
-            return [messages]
-        return messages
+            messages = [messages]
+
+        # Add prefix and code block markers
+        formatted_messages = []
+        for idx, msg in enumerate(messages):
+            if idx == 0:
+                formatted_msg = f"OCIR Cleanup Candidates:\n```\n{msg}\n```"
+            else:
+                formatted_msg = f"```\n{msg}\n```"
+            formatted_messages.append(formatted_msg)
+
+        return formatted_messages
+
+    def _build_deletion_table(self, deletion_results: dict[str, dict]) -> list[str]:
+        """Build formatted table for deletion results.
+
+        Args:
+            deletion_results: Dictionary of deletion results from delete_ocir_images()
+
+        Returns:
+            List of formatted message strings (may be paginated)
+        """
+        if not deletion_results:
+            return []
+
+        # Define table headers with column widths
+        headers = DapperTableHeaderOptions([
+            DapperTableHeader("Repository", 40),
+            DapperTableHeader("Deleted", 10),
+            DapperTableHeader("Failed", 10),
+            DapperTableHeader("Status", 10),
+        ])
+
+        # Create table with headers and pagination
+        table = DapperTable(
+            header_options=headers,
+            pagination_options=PaginationLength(1800),
+        )
+
+        # Collect deletion rows
+        for repo_key in sorted(deletion_results.keys()):
+            result = deletion_results[repo_key]
+            repository = result['repository']
+            total_deleted = result['total_deleted']
+            total_failed = result['total_failed']
+
+            # Determine status indicator
+            if total_failed == 0:
+                status = "✓"
+            else:
+                status = "⚠"
+
+            table.add_row([
+                repository,
+                str(total_deleted),
+                str(total_failed),
+                status
+            ])
+
+        messages = table.print()
+        if isinstance(messages, str):
+            messages = [messages]
+
+        # Add prefix and code block markers
+        formatted_messages = []
+        for idx, msg in enumerate(messages):
+            if idx == 0:
+                formatted_msg = f"Deletion Results:\n```\n{msg}\n```"
+            else:
+                formatted_msg = f"```\n{msg}\n```"
+            formatted_messages.append(formatted_msg)
+
+        return formatted_messages
+
+    def _build_in_use_table(self, cleanup_recommendations: dict[str, dict]) -> list[str]:
+        """Build formatted table showing protected in-use images.
+
+        Args:
+            cleanup_recommendations: Dictionary of cleanup recommendations with in-use tags
+
+        Returns:
+            List of formatted message strings (may be paginated)
+        """
+        if not cleanup_recommendations:
+            return []
+
+        # Collect all in-use tags
+        in_use_rows = []
+        for repo_key in sorted(cleanup_recommendations.keys()):
+            rec = cleanup_recommendations[repo_key]
+            repository = rec['repository']
+            tags_in_use = rec['tags_in_use']
+
+            for tag in sorted(tags_in_use):
+                in_use_rows.append([repository, tag, "In Use - Kept"])
+
+        # If no in-use tags, return empty
+        if not in_use_rows:
+            return []
+
+        # Define table headers with column widths
+        headers = DapperTableHeaderOptions([
+            DapperTableHeader("Repository", 40),
+            DapperTableHeader("Tag", 30),
+            DapperTableHeader("Status", 20),
+        ])
+
+        # Create table with headers and pagination
+        table = DapperTable(
+            header_options=headers,
+            pagination_options=PaginationLength(1800),
+        )
+
+        # Add rows to table
+        for row in in_use_rows:
+            table.add_row(row)
+
+        messages = table.print()
+        if isinstance(messages, str):
+            messages = [messages]
+
+        # Add prefix and code block markers
+        formatted_messages = []
+        for idx, msg in enumerate(messages):
+            if idx == 0:
+                formatted_msg = f"Protected Images (In Use):\n```\n{msg}\n```"
+            else:
+                formatted_msg = f"```\n{msg}\n```"
+            formatted_messages.append(formatted_msg)
+
+        return formatted_messages
+
+    def _build_deletion_errors_table(self, deletion_results: dict[str, dict]) -> list[str]:
+        """Build formatted table showing deletion failures with error details.
+
+        Args:
+            deletion_results: Dictionary of deletion results from delete_ocir_images()
+
+        Returns:
+            List of formatted message strings (may be paginated)
+        """
+        if not deletion_results:
+            return []
+
+        # Collect all failed deletions
+        error_rows = []
+        for repo_key in sorted(deletion_results.keys()):
+            result = deletion_results[repo_key]
+            repository = result['repository']
+            failed = result.get('failed', [])
+
+            for failure in failed:
+                tag = failure.get('tag', 'unknown')
+                error = failure.get('error', 'Unknown error')
+
+                # Truncate error message to keep it readable
+                if len(error) > 40:
+                    error = error[:37] + "..."
+
+                error_rows.append([repository, tag, error])
+
+        # If no failures, return empty
+        if not error_rows:
+            return []
+
+        # Define table headers with column widths
+        headers = DapperTableHeaderOptions([
+            DapperTableHeader("Repository", 30),
+            DapperTableHeader("Failed Tag", 20),
+            DapperTableHeader("Error", 40),
+        ])
+
+        # Create table with headers and pagination
+        table = DapperTable(
+            header_options=headers,
+            pagination_options=PaginationLength(1800),
+        )
+
+        # Add rows to table
+        for row in error_rows:
+            table.add_row(row)
+
+        messages = table.print()
+        if isinstance(messages, str):
+            messages = [messages]
+
+        # Add prefix and code block markers
+        formatted_messages = []
+        for idx, msg in enumerate(messages):
+            if idx == 0:
+                formatted_msg = f"Failed Deletions:\n```\n{msg}\n```"
+            else:
+                formatted_msg = f"```\n{msg}\n```"
+            formatted_messages.append(formatted_msg)
+
+        return formatted_messages
 
     def _generate_csv(
         self,

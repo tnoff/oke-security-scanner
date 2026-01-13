@@ -369,3 +369,285 @@ class TestDiscordNotifier:
         # Verify cleanup section is NOT included
         assert "=== OCIR CLEANUP RECOMMENDATIONS ===" not in csv_data
         assert "Old - Can Delete" not in csv_data
+
+    def test_build_deletion_table(self, notifier):
+        """Test _build_deletion_table method."""
+        deletion_results = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'deleted': ['tag1', 'tag2'],
+                'failed': [],
+                'total_deleted': 2,
+                'total_failed': 0,
+            },
+            'test.ocir.io/namespace/app2': {
+                'repository': 'namespace/app2',
+                'deleted': ['tag3'],
+                'failed': [{'tag': 'tag4', 'error': 'Permission denied'}],
+                'total_deleted': 1,
+                'total_failed': 1,
+            },
+        }
+
+        table_messages = notifier._build_deletion_table(deletion_results)
+
+        assert len(table_messages) > 0
+        assert "Deletion Results" in table_messages[0]
+        assert "Repository" in table_messages[0]
+        assert "namespace/app1" in table_messages[0]
+        assert "namespace/app2" in table_messages[0]
+        # Check status indicators
+        assert "✓" in table_messages[0]  # Success for app1
+        assert "⚠" in table_messages[0]  # Warning for app2 (has failures)
+
+    def test_build_deletion_table_empty(self, notifier):
+        """Test _build_deletion_table with empty results."""
+        table_messages = notifier._build_deletion_table({})
+        assert table_messages == []
+
+    def test_build_in_use_table(self, notifier):
+        """Test _build_in_use_table method."""
+        cleanup_recommendations = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'tags_in_use': ['tag1', 'tag2'],
+                'tags_to_keep': ['tag3'],
+                'tags_to_delete': [],
+                'total_deletable': 0,
+            },
+            'test.ocir.io/namespace/app2': {
+                'repository': 'namespace/app2',
+                'tags_in_use': ['prod-v1'],
+                'tags_to_keep': [],
+                'tags_to_delete': [],
+                'total_deletable': 0,
+            },
+        }
+
+        table_messages = notifier._build_in_use_table(cleanup_recommendations)
+
+        assert len(table_messages) > 0
+        assert "Protected Images (In Use)" in table_messages[0]
+        assert "namespace/app1" in table_messages[0]
+        assert "tag1" in table_messages[0]
+        assert "tag2" in table_messages[0]
+        assert "namespace/app2" in table_messages[0]
+        assert "prod-v1" in table_messages[0]
+        assert "In Use - Kept" in table_messages[0]
+
+    def test_build_in_use_table_no_in_use_tags(self, notifier):
+        """Test _build_in_use_table when no tags are in use."""
+        cleanup_recommendations = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'tags_in_use': [],
+                'tags_to_keep': ['tag1'],
+                'tags_to_delete': [],
+                'total_deletable': 0,
+            },
+        }
+
+        table_messages = notifier._build_in_use_table(cleanup_recommendations)
+        assert table_messages == []
+
+    def test_build_in_use_table_empty(self, notifier):
+        """Test _build_in_use_table with empty recommendations."""
+        table_messages = notifier._build_in_use_table({})
+        assert table_messages == []
+
+    def test_build_deletion_errors_table(self, notifier):
+        """Test _build_deletion_errors_table method."""
+        deletion_results = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'deleted': [],
+                'failed': [
+                    {'tag': 'tag1', 'error': 'Permission denied'},
+                    {'tag': 'tag2', 'error': 'Image not found'},
+                ],
+                'total_deleted': 0,
+                'total_failed': 2,
+            },
+        }
+
+        table_messages = notifier._build_deletion_errors_table(deletion_results)
+
+        assert len(table_messages) > 0
+        assert "Failed Deletions" in table_messages[0]
+        assert "namespace/app1" in table_messages[0]
+        assert "tag1" in table_messages[0]
+        assert "tag2" in table_messages[0]
+        assert "Permission denied" in table_messages[0]
+        assert "Image not found" in table_messages[0]
+
+    def test_build_deletion_errors_table_truncates_long_errors(self, notifier):
+        """Test that error messages are truncated if too long."""
+        deletion_results = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'deleted': [],
+                'failed': [
+                    {
+                        'tag': 'tag1',
+                        'error': 'This is a very long error message that should be truncated to keep the table readable'
+                    },
+                ],
+                'total_deleted': 0,
+                'total_failed': 1,
+            },
+        }
+
+        table_messages = notifier._build_deletion_errors_table(deletion_results)
+
+        assert len(table_messages) > 0
+        # Error should be truncated with ellipsis
+        assert "..." in table_messages[0]
+        # Full message should not be present
+        assert "This is a very long error message that should be truncated to keep the table readable" not in table_messages[0]
+
+    def test_build_deletion_errors_table_no_failures(self, notifier):
+        """Test _build_deletion_errors_table when there are no failures."""
+        deletion_results = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'deleted': ['tag1', 'tag2'],
+                'failed': [],
+                'total_deleted': 2,
+                'total_failed': 0,
+            },
+        }
+
+        table_messages = notifier._build_deletion_errors_table(deletion_results)
+        assert table_messages == []
+
+    def test_build_deletion_errors_table_empty(self, notifier):
+        """Test _build_deletion_errors_table with empty results."""
+        table_messages = notifier._build_deletion_errors_table({})
+        assert table_messages == []
+
+    @patch('src.discord_notifier.time.sleep')
+    @patch('src.discord_notifier.requests.post')
+    def test_send_deletion_report_success(self, mock_post, mock_sleep, notifier):
+        """Test send_deletion_report successfully sends messages."""
+        mock_response = Mock()
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        deletion_results = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'deleted': ['tag1', 'tag2'],
+                'failed': [],
+                'total_deleted': 2,
+                'total_failed': 0,
+            },
+        }
+
+        cleanup_recommendations = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'tags_in_use': ['prod'],
+                'tags_to_keep': ['tag3'],
+                'tags_to_delete': [],
+                'total_deletable': 0,
+            },
+        }
+
+        result = notifier.send_deletion_report(
+            deletion_results=deletion_results,
+            cleanup_recommendations=cleanup_recommendations,
+            total_deleted=2,
+            total_failed=0,
+        )
+
+        assert result is True
+        # Should send multiple messages (summary, deletion table, in-use table)
+        assert mock_post.call_count >= 2
+        # Verify summary message content
+        first_call = mock_post.call_args_list[0]
+        assert "OCIR Image Deletion Complete" in first_call.kwargs["json"]["content"]
+        assert "Deleted: 2" in first_call.kwargs["json"]["content"]
+        assert "Failed: 0" in first_call.kwargs["json"]["content"]
+        # Verify rate limiting
+        if mock_post.call_count > 1:
+            assert mock_sleep.call_count == mock_post.call_count - 1
+
+    @patch('src.discord_notifier.time.sleep')
+    @patch('src.discord_notifier.requests.post')
+    def test_send_deletion_report_with_failures(self, mock_post, mock_sleep, notifier):
+        """Test send_deletion_report includes error table when failures occur."""
+        mock_response = Mock()
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        deletion_results = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'deleted': ['tag1'],
+                'failed': [{'tag': 'tag2', 'error': 'Permission denied'}],
+                'total_deleted': 1,
+                'total_failed': 1,
+            },
+        }
+
+        cleanup_recommendations = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'tags_in_use': [],
+                'tags_to_keep': [],
+                'tags_to_delete': [],
+                'total_deletable': 0,
+            },
+        }
+
+        result = notifier.send_deletion_report(
+            deletion_results=deletion_results,
+            cleanup_recommendations=cleanup_recommendations,
+            total_deleted=1,
+            total_failed=1,
+        )
+
+        assert result is True
+        # Should send multiple messages including error table
+        assert mock_post.call_count >= 2
+        # Verify summary shows failures
+        first_call = mock_post.call_args_list[0]
+        assert "Failed: 1" in first_call.kwargs["json"]["content"]
+
+    @patch('src.discord_notifier.requests.post')
+    def test_send_deletion_report_empty_results(self, mock_post, notifier):
+        """Test send_deletion_report handles empty results."""
+        result = notifier.send_deletion_report(
+            deletion_results={},
+            cleanup_recommendations={},
+            total_deleted=0,
+            total_failed=0,
+        )
+
+        assert result is True
+        # Should not send any messages for empty results
+        assert mock_post.call_count == 0
+
+    @patch('src.discord_notifier.requests.post')
+    def test_send_deletion_report_handles_error(self, mock_post, notifier):
+        """Test send_deletion_report handles exceptions."""
+        mock_post.side_effect = Exception("Network error")
+
+        deletion_results = {
+            'test.ocir.io/namespace/app1': {
+                'repository': 'namespace/app1',
+                'deleted': ['tag1'],
+                'failed': [],
+                'total_deleted': 1,
+                'total_failed': 0,
+            },
+        }
+
+        result = notifier.send_deletion_report(
+            deletion_results=deletion_results,
+            cleanup_recommendations={},
+            total_deleted=1,
+            total_failed=0,
+        )
+
+        assert result is False
