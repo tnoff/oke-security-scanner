@@ -1,5 +1,5 @@
 # Kubernetes client
-kubernetes==34.1.0
+kubernetes==35.0.0
 
 # OCI SDK for OCIR integration
 oci==2.165.0
