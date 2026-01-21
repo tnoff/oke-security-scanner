@@ -1,18 +1,96 @@
 """Trivy scanner wrapper for vulnerability scanning."""
 
-import base64
-from pathlib import Path
+from dataclasses import dataclass, field
 from logging import getLogger
-
-import json
+from json import JSONDecodeError
+from json import loads as json_loads
 import subprocess
-import time
 from typing import Optional
 
 from opentelemetry.sdk._logs import LoggingHandler
 from opentelemetry import trace
 
 from .config import Config
+from .k8s_client import Image
+
+OTEL_SPAN_PREFIX = 'scanner'
+
+@dataclass
+class CVEDetails:
+    '''Parsed CVE Details'''
+    severity: str
+    title: str
+    package: str
+    installed: str
+    fixed: str
+
+@dataclass
+class CVE:
+    '''CVE Info'''
+    cve_id: str
+    details: list[CVEDetails] = field(default_factory=list)
+
+@dataclass
+class ScanResult:
+    """Result from scanning a container image for vulnerabilities."""
+
+    image: Image
+    cves: list[CVE] = field(default_factory=list)
+    critical_count: int = field(init=False)
+    high_count: int = field(init=False)
+    critical_fixed_count: int = field(init=False)
+    high_fixed_count: int = field(init=False)
+
+    def __post_init__(self):
+        self.critical_count = 0
+        self.high_count = 0
+        self.critical_fixed_count = 0
+        self.high_fixed_count = 0
+
+    def add_details(self, cve_id: str, details: CVEDetails):
+        '''Add cve details for id'''
+        if details.severity == 'CRITICAL':
+            self.critical_count +=1
+            if details.fixed:
+                self.critical_fixed_count += 1
+        if details.severity == 'HIGH':
+            self.high_count += 1
+            if details.fixed:
+                self.high_fixed_count += 1
+        for item in self.cves:
+            if cve_id == item.cve_id:
+                item.details.append(details)
+                return True
+        self.cves.append(CVE(cve_id, details=[details]))
+        return True
+
+@dataclass
+class CompleteScanResult():
+    '''Complete scan'''
+    total_critical: int = field(init=False)
+    total_critical_fixed: int = field(init=False)
+    total_high: int = field(init=False)
+    total_high_fixed: int = field(init=False)
+    failed_scans: int = field(init=False)
+    scan_results: list[ScanResult] = field(default_factory=list)
+
+    def __post_init__(self):
+        self.total_critical = 0
+        self.total_critical_fixed = 0
+        self.total_high = 0
+        self.total_high_fixed = 0
+        self.failed_scans = 0
+
+    def add_result(self, result: Optional[ScanResult]) -> bool:
+        if not result:
+            self.failed_scans += 1
+            return True
+        self.total_critical += result.critical_count
+        self.total_critical_fixed += result.critical_fixed_count
+        self.total_high += result.high_count
+        self.total_high_fixed += result.high_fixed_count
+        self.scan_results.append(result)
+        return True
 
 tracer = trace.get_tracer(__name__)
 logger = getLogger(__name__)
@@ -20,63 +98,17 @@ logger = getLogger(__name__)
 class TrivyScanner:
     """Wrapper for Trivy vulnerability scanner."""
 
-    def __init__(self, cfg: Config, metrics: dict, logger_provider):
+    def __init__(self, cfg: Config, logger_provider):
         """Initialize Trivy scanner."""
         self.cfg = cfg
-        self.metrics = metrics
         self.db_updated = False
         if logger_provider:
             logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
 
-        # Authenticate to OCIR for private image access
-        self._configure_registry_auth()
-
-    def _configure_registry_auth(self) -> None:
-        """Configure Docker registry authentication for private images."""
-        if not self.cfg.oci_registry or not self.cfg.oci_username or not self.cfg.oci_token:
-            logger.warning("OCIR credentials not fully configured, private image scans may fail")
-            return
-
-        try:
-            logger.info(f"Authenticating to OCIR registry: {self.cfg.oci_registry}")
-
-            # Create Docker config directory
-            docker_config_dir = Path.home() / ".docker"
-            docker_config_dir.mkdir(exist_ok=True)
-
-            # OCIR requires username format: <namespace>/<username>
-            ocir_username = f"{self.cfg.oci_namespace}/{self.cfg.oci_username}"
-
-            # Create auth token (base64 encode username:password)
-            auth_string = f"{ocir_username}:{self.cfg.oci_token}"
-            auth_token = base64.b64encode(auth_string.encode()).decode()
-
-            # Create Docker config.json
-            # Trivy respects Docker's credential store
-            config_content = {
-                "auths": {
-                    self.cfg.oci_registry: {
-                        "auth": auth_token
-                    }
-                }
-            }
-
-            config_file = docker_config_dir / "config.json"
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(config_content, f, indent=2)
-
-            logger.info("Successfully authenticated to OCIR")
-
-        except Exception as e:
-            logger.warning(f"Unexpected error during OCIR authentication: {e}")
-
     def update_database(self) -> bool:
         """Update Trivy vulnerability database."""
-        with tracer.start_as_current_span("update-trivy-db") as span:
+        with tracer.start_as_current_span(f'{OTEL_SPAN_PREFIX}.update_db') as span:
             try:
-                logger.info("Updating Trivy vulnerability database")
-                start_time = time.time()
-
                 subprocess.run(
                     ["trivy", "image", "--download-db-only"],
                     capture_output=True,
@@ -85,36 +117,26 @@ class TrivyScanner:
                     check=True,
                 )
 
-                duration = time.time() - start_time
-                logger.info(f"Trivy database updated successfully (duration: {round(duration, 2)}s)")
-
-                span.set_attribute("trivy.db_update.success", True)
-                span.set_attribute("trivy.db_update.duration", duration)
-
+                logger.info("Trivy database updated successfully")
                 self.db_updated = True
                 return True
 
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as e:
                 logger.warning("Trivy database update timed out, using cached database")
-                span.set_attribute("trivy.db_update.success", False)
-                span.set_attribute("trivy.db_update.error", "timeout")
+                span.record_exception(e)
                 return False
 
             except subprocess.CalledProcessError as e:
                 logger.warning(f"Trivy database update failed, using cached database: {e.stderr}")
-                span.set_attribute("trivy.db_update.success", False)
-                span.set_attribute("trivy.db_update.error", e.stderr)
+                span.record_exception(e)
                 return False
 
-    def scan_image(self, image: str) -> Optional[dict]:
+    def scan_image(self, image: Image) -> Optional[ScanResult]:
         """Scan a container image for vulnerabilities."""
-        with tracer.start_as_current_span("scan-image") as span:
-            span.set_attribute("image.name", image)
-            start_time = time.time()
-
+        with tracer.start_as_current_span(f'{OTEL_SPAN_PREFIX}.scan_image') as span:
+            span.set_attribute("image.name", image.full_name)
+            logger.info(f'Scanning image {image.full_name}')
             try:
-                logger.info(f"Scanning image: {image}")
-
                 # Run Trivy scan
                 result = subprocess.run(
                     [
@@ -123,116 +145,61 @@ class TrivyScanner:
                         "--format", "json",
                         "--severity", self.cfg.trivy_severity,
                         "--timeout", f"{self.cfg.trivy_timeout}s",
-                        "--quiet",
-                        image,
+                        image.full_name,
                     ],
                     capture_output=True,
                     text=True,
                     timeout=self.cfg.trivy_timeout + 30,
                     check=True,
                 )
+                return self._parse_vulnerabilities(image, json_loads(result.stdout))
 
-                duration = time.time() - start_time
-
-                # Parse results
-                scan_results = json.loads(result.stdout)
-                parsed_vulns = self._parse_vulnerabilities(scan_results)
-                vuln_counts = parsed_vulns["counts"]
-                vuln_cves = parsed_vulns["cves"]
-
-                # Log results
-                logger.info(
-                    f"Image scan completed: {image} "
-                    f"(duration: {round(duration, 2)}s, "
-                    f"critical: {vuln_counts.get('CRITICAL', 0)}, "
-                    f"high: {vuln_counts.get('HIGH', 0)})"
-                )
-
-                # Record metrics - set gauge with image and vulnerability counts (if metrics enabled)
-                if self.metrics:
-                    self.metrics["scan_total"].set(
-                        vuln_counts.get("CRITICAL", 0),
-                        {
-                            "image": image,
-                            "severity": "critical",
-                        }
-                    )
-                    self.metrics["scan_total"].set(
-                        vuln_counts.get("HIGH", 0),
-                        {
-                            "image": image,
-                            "severity": "high",
-                        }
-                    )
-
-                # Set span attributes
-                span.set_attribute("scan.success", True)
-                span.set_attribute("scan.duration", duration)
-                span.set_attribute("vulnerabilities.critical", vuln_counts.get("CRITICAL", 0))
-                span.set_attribute("vulnerabilities.high", vuln_counts.get("HIGH", 0))
-
-                return {
-                    "image": image,
-                    "duration": duration,
-                    "vulnerabilities": vuln_counts,
-                    "cves": vuln_cves,
-                    "results": scan_results,
-                }
-
-            except subprocess.TimeoutExpired:
-                logger.error(f"Image scan timed out: {image}")
-                span.set_attribute("scan.success", False)
-                span.set_attribute("scan.error", "timeout")
+            except subprocess.TimeoutExpired as e:
+                logger.error(f"Image scan timed out: {image.full_name}")
+                span.record_exception(e)
                 return None
 
             except subprocess.CalledProcessError as e:
-                logger.error(f"Image scan failed: {image} - {e.stderr}")
-                span.set_attribute("scan.success", False)
-                span.set_attribute("scan.error", e.stderr)
+                logger.error(f"Image scan failed: {image.full_name} - {e.stderr}")
+                span.record_exception(e)
                 return None
 
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse Trivy output for {image}: {e}")
-                span.set_attribute("scan.success", False)
-                span.set_attribute("scan.error", "parse_error")
+            except JSONDecodeError as e:
+                logger.error(f"Failed to parse Trivy output for {image.full_name}: {e}")
+                span.record_exception(e)
                 return None
 
-    def _parse_vulnerabilities(self, scan_results: dict) -> dict:
+    def _parse_vulnerabilities(self, image: Image, json_output: dict) -> Optional[ScanResult]:
         """Parse vulnerability counts and CVE details from Trivy results.
 
         Returns:
-            Dictionary with 'counts' and 'cves' keys
+            VulnerabilityAnalysis with counts and CVE details
         """
-        vulnerabilities = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-        cve_details = {}
+        if not json_output or "Results" not in json_output:
+            return None
 
-        if not scan_results or "Results" not in scan_results:
-            return {"counts": vulnerabilities, "cves": cve_details}
-
-        for result in scan_results.get("Results", []):
+        scan_result = ScanResult(image)
+        for result in json_output.get("Results", []):
             for vuln in result.get("Vulnerabilities", []):
                 severity = vuln.get("Severity", "UNKNOWN")
                 cve_id = vuln.get("VulnerabilityID")
 
-                if severity in vulnerabilities:
-                    vulnerabilities[severity] += 1
+                # Store CVE details for webhook reporting
+                if cve_id:
+                    scan_result.add_details(cve_id, CVEDetails(
+                        severity,
+                        vuln.get('Title', None),
+                        vuln.get('PkgName', None),
+                        vuln.get("InstalledVersion", ""),
+                        vuln.get("FixedVersion", ""),
+                    ))
 
-                    # Store CVE details for webhook reporting
-                    if cve_id:
-                        cve_details[cve_id] = {
-                            "severity": severity,
-                            "title": vuln.get("Title", ""),
-                            "package": vuln.get("PkgName", ""),
-                            "installed": vuln.get("InstalledVersion", ""),
-                            "fixed": vuln.get("FixedVersion", ""),
-                        }
+                # Log individual critical/high vulnerabilities
+                if severity in ["CRITICAL", "HIGH"]:
+                    logger.warning(
+                        f"{severity} vulnerability found: {cve_id} in "
+                        f"{vuln.get('PkgName')} {vuln.get('InstalledVersion')} "
+                        f"(fixed: {vuln.get('FixedVersion')}) - {vuln.get('Title', '')[:100]}"
+                    )
 
-                    # Log individual critical/high vulnerabilities
-                    if severity in ["CRITICAL", "HIGH"]:
-                        logger.warning(
-                            f"{severity} vulnerability found: {cve_id} in "
-                            f"{vuln.get('PkgName')} {vuln.get('InstalledVersion')} "
-                            f"(fixed: {vuln.get('FixedVersion')}) - {vuln.get('Title', '')[:100]}"
-                        )
-
-        return {"counts": vulnerabilities, "cves": cve_details}
+        return scan_result

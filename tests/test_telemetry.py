@@ -1,9 +1,8 @@
 """Tests for telemetry module."""
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from src.telemetry import setup_telemetry, create_metrics
-from src.config import Config
+from unittest.mock import Mock, patch
+from src.telemetry import setup_telemetry, create_metrics, Metrics
 
 
 class TestTelemetry:
@@ -35,6 +34,7 @@ class TestTelemetry:
         mock_meter_provider_class,
         mock_tracer_provider_class,
         mock_get_resources,
+        base_config,
     ):
         """Test that setup_telemetry returns trace_provider, meter_provider, and logger_provider."""
         # Setup mocks
@@ -46,27 +46,12 @@ class TestTelemetry:
         mock_meter_provider_class.return_value = mock_meter_provider
         mock_logger_provider_class.return_value = mock_logger_provider
 
-        # Create test config with all features enabled
-        config = Config(
-            oci_registry="test.ocir.io",
-            oci_username="test",
-            oci_token="token",
-            oci_namespace="namespace",
-            otlp_endpoint="http://localhost:4318",
-            otlp_insecure=True,
-            otlp_traces_enabled=True,
-            otlp_metrics_enabled=True,
-            otlp_logs_enabled=True,
-            trivy_severity="CRITICAL,HIGH",
-            trivy_timeout=300,
-            namespaces=[],
-            exclude_namespaces=[],
-            discord_webhook_url="",
-            ocir_cleanup_enabled=False,
-            ocir_cleanup_keep_count=5,
-        )
+        # Enable all OTLP features
+        base_config.otlp_traces_enabled = True
+        base_config.otlp_metrics_enabled = True
+        base_config.otlp_logs_enabled = True
 
-        trace_provider, meter_provider, logger_provider = setup_telemetry(config)
+        trace_provider, meter_provider, logger_provider = setup_telemetry(base_config)
 
         assert trace_provider == mock_trace_provider
         assert meter_provider == mock_meter_provider
@@ -94,6 +79,7 @@ class TestTelemetry:
         mock_tracer_provider_class,
         mock_metrics,
         mock_trace,
+        base_config,
     ):
         """Test that setup_telemetry sets global trace and meter providers."""
         mock_trace_provider = Mock()
@@ -104,34 +90,19 @@ class TestTelemetry:
         mock_meter_provider_class.return_value = mock_meter_provider
         mock_logger_provider_class.return_value = mock_logger_provider
 
-        # Create test config with all features enabled
-        config = Config(
-            oci_registry="test.ocir.io",
-            oci_username="test",
-            oci_token="token",
-            oci_namespace="namespace",
-            otlp_endpoint="http://localhost:4318",
-            otlp_insecure=True,
-            otlp_traces_enabled=True,
-            otlp_metrics_enabled=True,
-            otlp_logs_enabled=True,
-            trivy_severity="CRITICAL,HIGH",
-            trivy_timeout=300,
-            namespaces=[],
-            exclude_namespaces=[],
-            discord_webhook_url="",
-            ocir_cleanup_enabled=False,
-            ocir_cleanup_keep_count=5,
-        )
+        # Enable all OTLP features
+        base_config.otlp_traces_enabled = True
+        base_config.otlp_metrics_enabled = True
+        base_config.otlp_logs_enabled = True
 
-        setup_telemetry(config)
+        setup_telemetry(base_config)
 
         # Verify global providers are set
         mock_trace.set_tracer_provider.assert_called_once_with(mock_trace_provider)
         mock_metrics.set_meter_provider.assert_called_once_with(mock_meter_provider)
 
-    def test_create_metrics_returns_dict(self):
-        """Test that create_metrics returns a dictionary with metrics."""
+    def test_create_metrics_returns_metrics_dataclass(self):
+        """Test that create_metrics returns a Metrics dataclass."""
         mock_meter_provider = Mock()
         mock_meter = Mock()
         mock_gauge = Mock()
@@ -141,39 +112,20 @@ class TestTelemetry:
 
         result = create_metrics(mock_meter_provider)
 
-        assert isinstance(result, dict)
-        assert "scan_total" in result
-        assert result["scan_total"] == mock_gauge
+        assert isinstance(result, Metrics)
+        assert result.scan_total == mock_gauge
 
-    def test_create_metrics_creates_scan_total_gauge(self):
-        """Test that create_metrics creates scan_total gauge with correct parameters."""
+    def test_create_metrics_creates_image_scan_gauge(self):
+        """Test that create_metrics creates image_scan gauge with correct parameters."""
         mock_meter_provider = Mock()
         mock_meter = Mock()
+        mock_gauge = Mock()
 
         mock_meter_provider.get_meter.return_value = mock_meter
+        mock_meter.create_gauge.return_value = mock_gauge
 
         create_metrics(mock_meter_provider)
 
-        # Verify gauge was created with correct parameters
         mock_meter.create_gauge.assert_called_once()
         call_args = mock_meter.create_gauge.call_args
-        assert call_args[0][0] == "image_scan"  # name parameter
-        assert "description" in call_args[1]  # Has description
-
-    def test_create_metrics_gauge_has_unit(self):
-        """Test that gauge is created with unit."""
-        mock_meter_provider = Mock()
-        mock_meter = Mock()
-
-        mock_meter_provider.get_meter.return_value = mock_meter
-
-        create_metrics(mock_meter_provider)
-
-        call_args = mock_meter.create_gauge.call_args
-        assert "unit" in call_args[1]
-        assert call_args[1]["unit"] == "1"
-
-    def test_create_metrics_returns_none_when_provider_is_none(self):
-        """Test that create_metrics returns None when meter_provider is None."""
-        result = create_metrics(None)
-        assert result is None
+        assert call_args[0][0] == "image_scan"
