@@ -1,7 +1,8 @@
 """OpenTelemetry configuration for logs, traces, and metrics."""
 
 import logging
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Optional
 from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -16,6 +17,13 @@ from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 
 from .config import Config
+
+
+@dataclass
+class Metrics:
+    """Application metrics for vulnerability scanning."""
+
+    scan_total: Any  # OpenTelemetry Gauge instrument
 
 
 def setup_telemetry(cfg: Config) -> tuple[Optional[TracerProvider], Optional[MeterProvider], Optional[LoggerProvider]]:
@@ -62,23 +70,23 @@ def setup_telemetry(cfg: Config) -> tuple[Optional[TracerProvider], Optional[Met
 
     return trace_provider, meter_provider, logger_provider
 
-def create_metrics(meter_provider: Optional[MeterProvider]):
+def create_metrics(meter_provider: Optional[MeterProvider]) -> Optional[Metrics]:
     """Create application metrics.
 
     Args:
         meter_provider: MeterProvider instance, or None if metrics disabled
 
     Returns:
-        Dictionary of metrics, or None if meter_provider is None
+        Metrics dataclass, or None if meter_provider is None
     """
     if not meter_provider:
         return None
 
     meter = meter_provider.get_meter(__name__)
-    return {
-        "scan_total": meter.create_gauge(
+    return Metrics(
+        scan_total=meter.create_gauge(
             "image_scan",
             description="Current vulnerability count per image by severity",
             unit="1",
         ),
-    }
+    )

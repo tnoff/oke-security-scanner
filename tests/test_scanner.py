@@ -3,42 +3,18 @@
 import json
 import subprocess
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from src.scanner import TrivyScanner
-from src.config import Config
+from unittest.mock import Mock, patch
+from src.scanner import TrivyScanner, ScanResult, CVE, CVEDetails, CompleteScanResult
+from src.k8s_client import Image
 
 
 class TestTrivyScanner:
     """Tests for TrivyScanner class."""
 
     @pytest.fixture
-    def config(self):
-        """Create a test configuration."""
-        return Config(
-            oci_registry="test.ocir.io",
-            oci_username="testuser",
-            oci_token="testtoken",
-            oci_namespace="testnamespace",
-            otlp_endpoint="http://localhost:4318",
-            otlp_insecure=True,
-            otlp_traces_enabled=True,
-            otlp_metrics_enabled=True,
-            otlp_logs_enabled=True,
-            trivy_severity="CRITICAL,HIGH",
-            trivy_timeout=300,
-            namespaces=[],
-            exclude_namespaces=["kube-system"],
-            discord_webhook_url="",
-            ocir_cleanup_enabled=False,
-            ocir_cleanup_keep_count=5,
-        )
-
-    @pytest.fixture
-    def metrics(self):
-        """Create mock metrics."""
-        return {
-            "scan_total": Mock(),
-        }
+    def config(self, base_config):
+        """Use the shared base_config fixture."""
+        return base_config
 
     @pytest.fixture
     def logger_provider(self):
@@ -46,13 +22,10 @@ class TestTrivyScanner:
         return Mock()
 
     @pytest.fixture
-    def scanner(self, config, metrics, logger_provider):
+    def scanner(self, config, logger_provider):
         """Create a TrivyScanner instance."""
-        with patch('src.scanner.Path'), \
-             patch('src.scanner.open'), \
-             patch('src.scanner.json.dump'), \
-             patch('src.scanner.logger'):
-            return TrivyScanner(config, metrics, logger_provider)
+        with patch('src.scanner.logger'):
+            return TrivyScanner(config, logger_provider)
 
     @pytest.fixture
     def sample_trivy_results(self):
@@ -92,38 +65,50 @@ class TestTrivyScanner:
 
     def test_parse_vulnerabilities_counts(self, scanner, sample_trivy_results):
         """Test _parse_vulnerabilities returns correct counts."""
-        result = scanner._parse_vulnerabilities(sample_trivy_results)
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner._parse_vulnerabilities(image, sample_trivy_results)
 
-        assert result["counts"]["CRITICAL"] == 1
-        assert result["counts"]["HIGH"] == 1
-        assert result["counts"]["MEDIUM"] == 1
-        assert result["counts"]["LOW"] == 0
+        assert isinstance(result, ScanResult)
+        assert result.critical_count == 1
+        assert result.high_count == 1
+        # critical_fixed_count and high_fixed_count track those with fixes
+        assert result.critical_fixed_count == 1
+        assert result.high_fixed_count == 1
 
     def test_parse_vulnerabilities_cves(self, scanner, sample_trivy_results):
         """Test _parse_vulnerabilities returns CVE details."""
-        result = scanner._parse_vulnerabilities(sample_trivy_results)
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner._parse_vulnerabilities(image, sample_trivy_results)
 
-        assert "CVE-2023-1234" in result["cves"]
-        assert result["cves"]["CVE-2023-1234"]["severity"] == "CRITICAL"
-        assert result["cves"]["CVE-2023-1234"]["title"] == "Critical vulnerability in curl"
-        assert result["cves"]["CVE-2023-1234"]["package"] == "curl"
-        assert result["cves"]["CVE-2023-1234"]["installed"] == "7.68.0"
-        assert result["cves"]["CVE-2023-1234"]["fixed"] == "7.68.1"
+        # Find the critical CVE
+        critical_cve = None
+        for cve in result.cves:
+            if cve.cve_id == "CVE-2023-1234":
+                critical_cve = cve
+                break
+
+        assert critical_cve is not None
+        assert len(critical_cve.details) == 1
+        detail = critical_cve.details[0]
+        assert detail.severity == "CRITICAL"
+        assert detail.title == "Critical vulnerability in curl"
+        assert detail.package == "curl"
+        assert detail.installed == "7.68.0"
+        assert detail.fixed == "7.68.1"
 
     def test_parse_vulnerabilities_empty_results(self, scanner):
         """Test _parse_vulnerabilities with empty results."""
-        result = scanner._parse_vulnerabilities({})
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner._parse_vulnerabilities(image, {})
 
-        assert result["counts"]["CRITICAL"] == 0
-        assert result["counts"]["HIGH"] == 0
-        assert result["cves"] == {}
+        assert result is None
 
     def test_parse_vulnerabilities_no_results_key(self, scanner):
         """Test _parse_vulnerabilities with missing Results key."""
-        result = scanner._parse_vulnerabilities({"SomeOtherKey": []})
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner._parse_vulnerabilities(image, {"SomeOtherKey": []})
 
-        assert result["counts"]["CRITICAL"] == 0
-        assert result["cves"] == {}
+        assert result is None
 
     @patch('src.scanner.subprocess.run')
     def test_update_database_success(self, mock_run, scanner):
@@ -165,22 +150,23 @@ class TestTrivyScanner:
         mock_result.returncode = 0
         mock_run.return_value = mock_result
 
-        result = scanner.scan_image("test-image:latest")
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner.scan_image(image)
 
         assert result is not None
-        assert result["image"] == "test-image:latest"
-        assert "vulnerabilities" in result
-        assert "cves" in result
-        assert result["vulnerabilities"]["CRITICAL"] == 1
-        assert result["vulnerabilities"]["HIGH"] == 1
-        assert "CVE-2023-1234" in result["cves"]
+        assert isinstance(result, ScanResult)
+        assert result.image == image
+        assert result.critical_count == 1
+        assert result.high_count == 1
+        assert len(result.cves) == 3  # 3 unique CVEs
 
     @patch('src.scanner.subprocess.run')
     def test_scan_image_timeout(self, mock_run, scanner):
         """Test image scan timeout."""
         mock_run.side_effect = subprocess.TimeoutExpired("trivy", 300)
 
-        result = scanner.scan_image("test-image:latest")
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner.scan_image(image)
 
         assert result is None
 
@@ -191,7 +177,8 @@ class TestTrivyScanner:
             1, "trivy", stderr="Scan failed"
         )
 
-        result = scanner.scan_image("test-image:latest")
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner.scan_image(image)
 
         assert result is None
 
@@ -203,23 +190,10 @@ class TestTrivyScanner:
         mock_result.returncode = 0
         mock_run.return_value = mock_result
 
-        result = scanner.scan_image("test-image:latest")
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner.scan_image(image)
 
         assert result is None
-
-    @patch('src.scanner.subprocess.run')
-    def test_scan_image_sets_metrics(self, mock_run, scanner, sample_trivy_results):
-        """Test that scan_image sets metrics correctly."""
-        mock_result = Mock()
-        mock_result.stdout = json.dumps(sample_trivy_results)
-        mock_result.returncode = 0
-        mock_run.return_value = mock_result
-
-        result = scanner.scan_image("test-image:latest")
-
-        assert result is not None
-        # Verify metrics were set
-        assert scanner.metrics["scan_total"].set.call_count == 2  # Once for CRITICAL, once for HIGH
 
     @patch('src.scanner.subprocess.run')
     def test_scan_image_command_includes_severity(self, mock_run, scanner, sample_trivy_results):
@@ -228,7 +202,8 @@ class TestTrivyScanner:
         mock_result.stdout = json.dumps(sample_trivy_results)
         mock_run.return_value = mock_result
 
-        scanner.scan_image("test-image:latest")
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        scanner.scan_image(image)
 
         # Check the command includes severity flag
         call_args = mock_run.call_args[0][0]
@@ -242,9 +217,66 @@ class TestTrivyScanner:
         mock_result.stdout = json.dumps(sample_trivy_results)
         mock_run.return_value = mock_result
 
-        scanner.scan_image("test-image:latest")
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        scanner.scan_image(image)
 
         # Check the command includes timeout flag
         call_args = mock_run.call_args[0][0]
         assert "--timeout" in call_args
         assert "300s" in call_args
+
+
+class TestCompleteScanResult:
+    """Tests for CompleteScanResult dataclass."""
+
+    def test_add_result_success(self):
+        """Test adding a successful scan result."""
+        complete = CompleteScanResult()
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        scan_result = ScanResult(image)
+        scan_result.critical_count = 2
+        scan_result.critical_fixed_count = 1
+        scan_result.high_count = 3
+        scan_result.high_fixed_count = 2
+
+        complete.add_result(scan_result)
+
+        assert complete.total_critical == 2
+        assert complete.total_critical_fixed == 1
+        assert complete.total_high == 3
+        assert complete.total_high_fixed == 2
+        assert complete.failed_scans == 0
+        assert len(complete.scan_results) == 1
+
+    def test_add_result_none(self):
+        """Test adding a None result (failed scan)."""
+        complete = CompleteScanResult()
+
+        complete.add_result(None)
+
+        assert complete.failed_scans == 1
+        assert complete.total_critical == 0
+        assert len(complete.scan_results) == 0
+
+    def test_multiple_results(self):
+        """Test adding multiple scan results."""
+        complete = CompleteScanResult()
+
+        image1 = Image("test.ocir.io/namespace/app1:v1.0.0")
+        result1 = ScanResult(image1)
+        result1.critical_count = 2
+        result1.high_count = 1
+
+        image2 = Image("test.ocir.io/namespace/app2:v1.0.0")
+        result2 = ScanResult(image2)
+        result2.critical_count = 1
+        result2.high_count = 2
+
+        complete.add_result(result1)
+        complete.add_result(result2)
+        complete.add_result(None)  # Failed scan
+
+        assert complete.total_critical == 3
+        assert complete.total_high == 3
+        assert complete.failed_scans == 1
+        assert len(complete.scan_results) == 2

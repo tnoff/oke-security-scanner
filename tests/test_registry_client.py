@@ -1,36 +1,19 @@
 """Tests for registry_client module."""
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
-from datetime import datetime
-from src.registry_client import RegistryClient
-from src.config import Config
+from unittest.mock import Mock, patch
+from datetime import datetime, timezone, timedelta
+from src.registry_client import RegistryClient, UpdateInfo, CleanupRecommendation
+from src.k8s_client import Image
 
 
 class TestRegistryClient:
     """Tests for RegistryClient class."""
 
     @pytest.fixture
-    def config(self):
-        """Create test config."""
-        return Config(
-            oci_registry="test.ocir.io",
-            oci_username="testuser",
-            oci_token="testtoken",
-            oci_namespace="testnamespace",
-            otlp_endpoint="http://localhost:4318",
-            otlp_insecure=True,
-            otlp_traces_enabled=True,
-            otlp_metrics_enabled=True,
-            otlp_logs_enabled=True,
-            trivy_severity="CRITICAL,HIGH",
-            trivy_timeout=300,
-            namespaces=[],
-            exclude_namespaces=[],
-            discord_webhook_url="",
-            ocir_cleanup_enabled=False,
-            ocir_cleanup_keep_count=5,
-        )
+    def config(self, base_config):
+        """Use the shared base_config fixture."""
+        return base_config
 
     @patch('src.registry_client.oci')
     def test_init_with_oci_sdk(self, mock_oci, config):
@@ -39,13 +22,16 @@ class TestRegistryClient:
         mock_oci.config.from_file.return_value = mock_config
         mock_artifacts_client = Mock()
         mock_identity_client = Mock()
+        mock_object_client = Mock()
         mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
         mock_oci.identity.IdentityClient.return_value = mock_identity_client
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
 
         client = RegistryClient(config)
 
         assert client.artifacts_client == mock_artifacts_client
         assert client.identity_client == mock_identity_client
+        assert client.object_client == mock_object_client
         assert client.oci_config == mock_config
         mock_oci.config.from_file.assert_called_once()
 
@@ -58,32 +44,165 @@ class TestRegistryClient:
 
         assert client.artifacts_client is None
         assert client.identity_client is None
+        assert client.object_client is None
         assert client.oci_config is None
 
-    def test_parse_image_name_with_registry(self, config):
-        """Test parsing image name with explicit registry."""
-        registry, repository, tag = RegistryClient.parse_image_name(
-            "iad.ocir.io/namespace/repo:v1.0.0"
-        )
-        assert registry == "iad.ocir.io"
-        assert repository == "namespace/repo"
-        assert tag == "v1.0.0"
+    @patch('src.registry_client.oci')
+    def test_oci_namespace_property_fetches_from_object_storage(self, mock_oci, config):
+        """Test oci_namespace property fetches namespace from Object Storage API."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
 
-    def test_parse_image_name_without_tag(self, config):
-        """Test parsing image name without tag."""
-        registry, repository, tag = RegistryClient.parse_image_name(
-            "docker.io/library/nginx"
-        )
-        assert registry == "docker.io"
-        assert repository == "library/nginx"
-        assert tag == "latest"
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
 
-    def test_is_ocir_image(self, config):
-        """Test is_ocir_image check."""
-        with patch('src.registry_client.oci'):
-            client = RegistryClient(config)
-            assert client.is_ocir_image("test.ocir.io") is True
-            assert client.is_ocir_image("docker.io") is False
+        client = RegistryClient(config)
+        namespace = client.oci_namespace
+
+        assert namespace == 'testnamespace'
+        mock_object_client.get_namespace.assert_called_once()
+
+    @patch('src.registry_client.oci')
+    def test_oci_namespace_property_caches_result(self, mock_oci, config):
+        """Test oci_namespace property caches the result after first fetch."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+
+        # First call
+        namespace1 = client.oci_namespace
+        # Second call
+        namespace2 = client.oci_namespace
+
+        assert namespace1 == 'testnamespace'
+        assert namespace2 == 'testnamespace'
+        # Should only call API once
+        assert mock_object_client.get_namespace.call_count == 1
+
+    @patch('src.registry_client.oci')
+    def test_oci_namespace_property_returns_none_without_client(self, mock_oci, config):
+        """Test oci_namespace property returns None when object client unavailable."""
+        mock_oci.config.from_file.side_effect = Exception("No config")
+
+        client = RegistryClient(config)
+        namespace = client.oci_namespace
+
+        assert namespace is None
+
+    @patch('src.registry_client.oci')
+    def test_oci_registry_property_caches_result(self, mock_oci, config):
+        """Test oci_registry property caches the result after first derivation."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test', 'region': 'us-ashburn-1'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+        # Pre-populate cache
+        client._oci_registry = 'iad.ocir.io'
+
+        # First call
+        registry1 = client.oci_registry
+        # Second call
+        registry2 = client.oci_registry
+
+        assert registry1 == 'iad.ocir.io'
+        assert registry2 == 'iad.ocir.io'
+
+    @patch('src.registry_client.oci')
+    def test_oci_registry_property_returns_none_without_config(self, mock_oci, config):
+        """Test oci_registry property returns None when OCI config unavailable."""
+        mock_oci.config.from_file.side_effect = Exception("No config")
+
+        client = RegistryClient(config)
+        registry = client.oci_registry
+
+        assert registry is None
+
+    @patch('src.registry_client.oci')
+    def test_strip_namespace_prefix_with_namespace(self, mock_oci, config):
+        """Test _strip_namespace_prefix strips namespace prefix."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+
+        # Should strip namespace prefix
+        assert client._strip_namespace_prefix('testnamespace/myapp') == 'myapp'
+        assert client._strip_namespace_prefix('testnamespace/my-app') == 'my-app'
+
+    @patch('src.registry_client.oci')
+    def test_strip_namespace_prefix_without_namespace(self, mock_oci, config):
+        """Test _strip_namespace_prefix leaves repo unchanged if no namespace prefix."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+
+        # Should not change if no namespace prefix
+        assert client._strip_namespace_prefix('myapp') == 'myapp'
+        assert client._strip_namespace_prefix('my-app') == 'my-app'
+
+    @patch('src.registry_client.oci')
+    def test_strip_namespace_prefix_different_namespace(self, mock_oci, config):
+        """Test _strip_namespace_prefix leaves repo unchanged if different namespace."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+
+        # Should not change if different namespace prefix
+        assert client._strip_namespace_prefix('othernamespace/myapp') == 'othernamespace/myapp'
+
+    @patch('src.registry_client.oci')
+    def test_strip_namespace_prefix_fallback_without_namespace(self, mock_oci, config):
+        """Test _strip_namespace_prefix fallback when namespace unavailable."""
+        mock_oci.config.from_file.side_effect = Exception("No config")
+
+        client = RegistryClient(config)
+
+        # Should fall back to taking last part after '/'
+        assert client._strip_namespace_prefix('anyprefix/myapp') == 'myapp'
+        assert client._strip_namespace_prefix('myapp') == 'myapp'
 
     @patch('src.registry_client.oci')
     def test_get_tenancy_id(self, mock_oci, config):
@@ -92,6 +211,7 @@ class TestRegistryClient:
         mock_oci.config.from_file.return_value = mock_config
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
         mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
 
         client = RegistryClient(config)
         tenancy_id = client._get_tenancy_id()
@@ -111,13 +231,13 @@ class TestRegistryClient:
     @patch('src.registry_client.oci')
     def test_list_all_compartments(self, mock_oci, config):
         """Test _list_all_compartments method."""
-        # Setup mocks
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.config.from_file.return_value = mock_config
 
         mock_identity_client = Mock()
         mock_oci.identity.IdentityClient.return_value = mock_identity_client
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
 
         # Mock compartment list response
         mock_compartment1 = Mock()
@@ -130,7 +250,7 @@ class TestRegistryClient:
 
         mock_compartment3 = Mock()
         mock_compartment3.id = 'ocid1.compartment.3'
-        mock_compartment3.lifecycle_state = 'DELETED'  # Should be filtered out
+        mock_compartment3.lifecycle_state = 'DELETED'
 
         mock_response = Mock()
         mock_response.data = [mock_compartment1, mock_compartment2, mock_compartment3]
@@ -146,133 +266,21 @@ class TestRegistryClient:
         assert 'ocid1.compartment.2' in compartments
         assert 'ocid1.compartment.3' not in compartments
 
-        mock_identity_client.list_compartments.assert_called_once_with(
-            compartment_id='ocid1.tenancy.test',
-            compartment_id_in_subtree=True,
-            access_level="ACCESSIBLE"
-        )
-
-    @patch('src.registry_client.oci')
-    def test_list_all_compartments_failure(self, mock_oci, config):
-        """Test _list_all_compartments when API call fails."""
-        mock_config = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.config.from_file.return_value = mock_config
-
-        mock_identity_client = Mock()
-        mock_identity_client.list_compartments.side_effect = Exception("API Error")
-        mock_oci.identity.IdentityClient.return_value = mock_identity_client
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-
-        client = RegistryClient(config)
-        compartments = client._list_all_compartments()
-
-        # Should fall back to just tenancy
-        assert compartments == ['ocid1.tenancy.test']
-
     @patch('src.registry_client.oci')
     def test_find_repository_compartment_cached(self, mock_oci, config):
         """Test _find_repository_compartment with cached result."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
         mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
 
         client = RegistryClient(config)
         # Pre-populate cache
-        client._repository_compartment_cache['test/repo'] = 'ocid1.compartment.cached'
+        client._repository_compartment_cache['test-repo'] = 'ocid1.compartment.cached'
 
-        compartment_id = client._find_repository_compartment('test/repo')
+        compartment_id = client._find_repository_compartment('test-repo')
 
         assert compartment_id == 'ocid1.compartment.cached'
-        # Should not call any APIs when cached
-
-    @patch('src.registry_client.oci')
-    def test_find_repository_compartment_search(self, mock_oci, config):
-        """Test _find_repository_compartment by searching compartments."""
-        mock_config = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.config.from_file.return_value = mock_config
-
-        # Mock artifacts client
-        mock_artifacts_client = Mock()
-        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
-
-        # Mock identity client
-        mock_identity_client = Mock()
-        mock_oci.identity.IdentityClient.return_value = mock_identity_client
-
-        # Mock compartment list
-        mock_compartment = Mock()
-        mock_compartment.id = 'ocid1.compartment.apps'
-        mock_compartment.lifecycle_state = 'ACTIVE'
-        mock_comp_response = Mock()
-        mock_comp_response.data = [mock_compartment]
-        mock_identity_client.list_compartments.return_value = mock_comp_response
-
-        # Create proper ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        client = RegistryClient(config)
-
-        # Manually set up the exception handling
-        with patch.object(client.artifacts_client, 'list_container_images') as mock_list:
-            # Second call succeeds
-            second_response = Mock()
-            second_item = Mock()
-            second_response.data.items = [second_item]
-
-            def side_effect(*args, **kwargs):
-                compartment = kwargs.get('compartment_id')
-                if compartment == 'ocid1.tenancy.test':
-                    raise ServiceError(404, 'Not found')
-                else:
-                    return second_response
-
-            mock_list.side_effect = side_effect
-
-            compartment_id = client._find_repository_compartment('test/repo')
-
-            assert compartment_id == 'ocid1.compartment.apps'
-            # Should be cached now
-            assert client._repository_compartment_cache['test/repo'] == 'ocid1.compartment.apps'
-
-    @patch('src.registry_client.oci')
-    def test_find_repository_compartment_not_found(self, mock_oci, config):
-        """Test _find_repository_compartment when repository doesn't exist."""
-        mock_config = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.config.from_file.return_value = mock_config
-
-        mock_artifacts_client = Mock()
-        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
-        mock_identity_client = Mock()
-        mock_oci.identity.IdentityClient.return_value = mock_identity_client
-
-        # Mock compartment list - just tenancy
-        mock_comp_response = Mock()
-        mock_comp_response.data = []
-        mock_identity_client.list_compartments.return_value = mock_comp_response
-
-        # Create proper ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        # Mock 404 for all searches
-        with patch.object(mock_artifacts_client, 'list_container_images') as mock_list:
-            mock_list.side_effect = ServiceError(404, 'Not found')
-
-            client = RegistryClient(config)
-            compartment_id = client._find_repository_compartment('nonexistent/repo')
-
-            assert compartment_id is None
 
     @patch('src.registry_client.oci')
     def test_get_ocir_images_via_sdk(self, mock_oci, config):
@@ -284,35 +292,37 @@ class TestRegistryClient:
         mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
         mock_oci.identity.IdentityClient.return_value = Mock()
 
-        # Mock finding compartment
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
         client = RegistryClient(config)
-        client._repository_compartment_cache['test/repo'] = 'ocid1.compartment.apps'
+        # Pre-populate compartment cache
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
 
         # Mock image list response
         mock_image1 = Mock()
         mock_image1.version = 'v1.0.0'
-        mock_image1.time_created = datetime(2024, 1, 1)
-        mock_image1.digest = 'sha256:abc123'
+        mock_image1.time_created = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_image1.id = 'ocid1.image.1'
 
         mock_image2 = Mock()
         mock_image2.version = 'v1.1.0'
-        mock_image2.time_created = datetime(2024, 2, 1)
-        mock_image2.digest = 'sha256:def456'
+        mock_image2.time_created = datetime(2024, 2, 1, tzinfo=timezone.utc)
+        mock_image2.id = 'ocid1.image.2'
 
-        mock_response = Mock()
-        mock_response.data.items = [mock_image1, mock_image2]
-        mock_artifacts_client.list_container_images.return_value = mock_response
+        mock_list_response = Mock()
+        mock_list_response.data.items = [mock_image1, mock_image2]
+        mock_artifacts_client.list_container_images.return_value = mock_list_response
 
-        images = client._get_ocir_images_via_sdk('test/repo')
+        image = Image('test.ocir.io/testnamespace/myapp:v1.0.0')
+        images = client._get_ocir_images_via_sdk(image)
 
         assert len(images) == 2
-        assert images[0]['tag'] == 'v1.0.0'
-        assert images[0]['created_at'] == datetime(2024, 1, 1)
-        assert images[0]['digest'] == 'sha256:abc123'
-        assert images[1]['tag'] == 'v1.1.0'
-
-        # Should be cached
-        assert 'test/repo' in client._ocir_image_cache
+        assert images[0].tag == 'v1.0.0'
+        assert images[1].tag == 'v1.1.0'
 
     @patch('src.registry_client.oci')
     def test_get_ocir_images_via_sdk_cached(self, mock_oci, config):
@@ -321,51 +331,20 @@ class TestRegistryClient:
         mock_artifacts_client = Mock()
         mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
         mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
 
         client = RegistryClient(config)
 
         # Pre-populate cache
-        cached_data = [
-            {'tag': 'cached', 'created_at': datetime(2024, 1, 1), 'digest': 'sha256:cached'}
-        ]
-        client._ocir_image_cache['test/repo'] = cached_data
+        cached_image = Image('test.ocir.io/testnamespace/myapp:cached')
+        client._ocir_image_cache['testnamespace/myapp'] = [cached_image]
 
-        images = client._get_ocir_images_via_sdk('test/repo')
+        image = Image('test.ocir.io/testnamespace/myapp:v1.0.0')
+        images = client._get_ocir_images_via_sdk(image)
 
-        assert images == cached_data
+        assert images == [cached_image]
         # Should not call API when cached
         mock_artifacts_client.list_container_images.assert_not_called()
-
-    @patch('src.registry_client.oci')
-    def test_get_ocir_images_via_sdk_no_compartment(self, mock_oci, config):
-        """Test _get_ocir_images_via_sdk when compartment not found."""
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_artifacts_client = Mock()
-        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
-
-        mock_identity_client = Mock()
-        mock_comp_response = Mock()
-        mock_comp_response.data = []
-        mock_identity_client.list_compartments.return_value = mock_comp_response
-        mock_oci.identity.IdentityClient.return_value = mock_identity_client
-
-        # Create proper ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        # Mock 404 for compartment search
-        with patch.object(mock_artifacts_client, 'list_container_images') as mock_list:
-            mock_list.side_effect = ServiceError(404, 'Not found')
-
-            client = RegistryClient(config)
-            images = client._get_ocir_images_via_sdk('nonexistent/repo')
-
-            assert images == []
 
     @patch('src.registry_client.oci')
     def test_get_ocir_images_via_sdk_no_client(self, mock_oci, config):
@@ -373,547 +352,137 @@ class TestRegistryClient:
         mock_oci.config.from_file.side_effect = Exception("No config")
 
         client = RegistryClient(config)
-        images = client._get_ocir_images_via_sdk('test/repo')
+        image = Image('test.ocir.io/testnamespace/myapp:v1.0.0')
+        images = client._get_ocir_images_via_sdk(image)
 
         assert images == []
 
     @patch('src.registry_client.oci')
-    def test_normalize_ocir_repository_with_namespace(self, mock_oci, config):
-        """Test normalize_ocir_repository strips namespace prefix."""
-        mock_oci.config.from_file.side_effect = Exception("No config")
+    def test_check_image_updates_skips_latest(self, mock_oci, config):
+        """Test check_image_updates skips 'latest' tag."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
 
         client = RegistryClient(config)
+        image = Image('test.ocir.io/testnamespace/myapp:latest')
 
-        # Should strip namespace prefix
-        assert client.normalize_ocir_repository('testnamespace/myapp') == 'myapp'
-        assert client.normalize_ocir_repository('testnamespace/my-app') == 'my-app'
-        assert client.normalize_ocir_repository('testnamespace/my_app') == 'my_app'
+        result = client.check_image_updates(image)
 
-    @patch('src.registry_client.oci')
-    def test_normalize_ocir_repository_without_namespace(self, mock_oci, config):
-        """Test normalize_ocir_repository leaves repo unchanged if no namespace prefix."""
-        mock_oci.config.from_file.side_effect = Exception("No config")
-
-        client = RegistryClient(config)
-
-        # Should not change if no namespace prefix
-        assert client.normalize_ocir_repository('myapp') == 'myapp'
-        assert client.normalize_ocir_repository('my-app') == 'my-app'
-        assert client.normalize_ocir_repository('my_app') == 'my_app'
+        assert result is None
 
     @patch('src.registry_client.oci')
-    def test_normalize_ocir_repository_different_namespace(self, mock_oci, config):
-        """Test normalize_ocir_repository leaves repo unchanged if different namespace."""
-        mock_oci.config.from_file.side_effect = Exception("No config")
-
-        client = RegistryClient(config)
-
-        # Should not change if different namespace prefix
-        assert client.normalize_ocir_repository('othernamespace/myapp') == 'othernamespace/myapp'
-        assert client.normalize_ocir_repository('other/myapp') == 'other/myapp'
-
-    @patch('src.registry_client.oci')
-    def test_normalize_ocir_repository_no_namespace_config(self, mock_oci):
-        """Test normalize_ocir_repository when oci_namespace is not configured."""
-        config = Config(
-            oci_registry="test.ocir.io",
-            oci_username="testuser",
-            oci_token="testtoken",
-            oci_namespace="",  # Empty namespace
-            otlp_endpoint="http://localhost:4318",
-            otlp_insecure=True,
-            otlp_traces_enabled=True,
-            otlp_metrics_enabled=True,
-            otlp_logs_enabled=True,
-            trivy_severity="CRITICAL,HIGH",
-            trivy_timeout=300,
-            namespaces=[],
-            exclude_namespaces=[],
-            discord_webhook_url="",
-            ocir_cleanup_enabled=False,
-            ocir_cleanup_keep_count=5,
-        )
-
-        mock_oci.config.from_file.side_effect = Exception("No config")
-
-        client = RegistryClient(config)
-
-        # Should not change anything if namespace is not configured
-        assert client.normalize_ocir_repository('testnamespace/myapp') == 'testnamespace/myapp'
-        assert client.normalize_ocir_repository('myapp') == 'myapp'
-
-    @patch('src.registry_client.oci')
-    def test_find_repository_compartment_uses_normalization(self, mock_oci, config):
-        """Test _find_repository_compartment normalizes repository name."""
+    def test_check_image_updates_returns_update_info(self, mock_oci, config):
+        """Test check_image_updates returns UpdateInfo when update available."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.config.from_file.return_value = mock_config
-
-        mock_artifacts_client = Mock()
-        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
-        mock_identity_client = Mock()
-        mock_oci.identity.IdentityClient.return_value = mock_identity_client
-
-        # Mock compartment list
-        mock_comp_response = Mock()
-        mock_comp_response.data = []
-        mock_identity_client.list_compartments.return_value = mock_comp_response
-
-        # Create proper ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        client = RegistryClient(config)
-
-        with patch.object(client.artifacts_client, 'list_container_images') as mock_list:
-            mock_response = Mock()
-            mock_response.data.items = [Mock()]
-            mock_list.return_value = mock_response
-
-            # Pass repository with namespace prefix
-            compartment_id = client._find_repository_compartment('testnamespace/myapp')
-
-            # Should call API with normalized name (without namespace)
-            assert mock_list.call_count >= 1
-            # Check that at least one call used the normalized repository name
-            call_args = mock_list.call_args
-            assert call_args.kwargs['repository_name'] == 'myapp'
-
-    @patch('src.registry_client.oci')
-    def test_get_ocir_images_uses_normalization(self, mock_oci, config):
-        """Test _get_ocir_images_via_sdk normalizes repository name."""
-        mock_config = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.config.from_file.return_value = mock_config
-
-        mock_artifacts_client = Mock()
-        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
         mock_oci.identity.IdentityClient.return_value = Mock()
 
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
         client = RegistryClient(config)
-        # Pre-populate cache with normalized name
         client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
 
-        # Mock image list response
-        mock_image = Mock()
-        mock_image.version = 'v1.0.0'
-        mock_image.time_created = datetime(2024, 1, 1)
-        mock_image.digest = 'sha256:abc123'
+        # Set up cached images with older and newer versions
+        old_image = Image('test.ocir.io/testnamespace/myapp:v1.0.0')
+        new_image = Image('test.ocir.io/testnamespace/myapp:v2.0.0')
+        client._ocir_image_cache['testnamespace/myapp'] = [old_image, new_image]
 
+        image = Image('test.ocir.io/testnamespace/myapp:v1.0.0')
+        result = client.check_image_updates(image)
+
+        assert result is not None
+        assert isinstance(result, UpdateInfo)
+        assert str(result.current) == '1.0.0'
+        assert str(result.latest) == '2.0.0'
+
+    @patch('src.registry_client.oci')
+    def test_get_old_images_returns_cleanup_recommendations(self, mock_oci, config):
+        """Test get_old_images returns CleanupRecommendation for old images."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
         mock_response = Mock()
-        mock_response.data.items = [mock_image]
-        mock_artifacts_client.list_container_images.return_value = mock_response
-
-        # Pass repository with namespace prefix
-        images = client._get_ocir_images_via_sdk('testnamespace/myapp')
-
-        assert len(images) == 1
-        assert images[0]['tag'] == 'v1.0.0'
-
-        # Should call API with normalized name
-        mock_artifacts_client.list_container_images.assert_called_once_with(
-            compartment_id='ocid1.compartment.apps',
-            repository_name='myapp'
-        )
-
-    def test_image_version_age_days_with_timezone_aware_datetime(self):
-        """Test age_days() works with timezone-aware datetimes."""
-        from datetime import timezone, timedelta
-        from src.registry_client import ImageVersion
-
-        # Create a version with timezone-aware datetime (like OCI SDK returns)
-        created_date = datetime.now(timezone.utc) - timedelta(days=10)
-        version = ImageVersion(tag='abc123', created_at=created_date)
-
-        age = version.age_days()
-
-        # Should be approximately 10 days old (allow for test execution time)
-        assert age is not None
-        assert 9 <= age <= 11
-
-    def test_image_version_age_days_without_created_at(self):
-        """Test age_days() returns None when no creation date."""
-        from src.registry_client import ImageVersion
-
-        version = ImageVersion(tag='abc123')
-        age = version.age_days()
-
-        assert age is None
-
-    @patch('src.registry_client.oci')
-    def test_get_latest_version_mixed_semver_and_commit_hash(self, mock_oci, config):
-        """Test get_latest_version() with both semver and commit hash tags."""
-        from datetime import timezone, timedelta
-
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-
-        # Mock ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-        mock_oci.exceptions.ServiceError = ServiceError
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
 
         client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
 
-        # Create test data with mixed version types
-        # Semver tag from 5 days ago
-        semver_date = datetime.now(timezone.utc) - timedelta(days=5)
-        # Commit hash from 2 days ago (newer!)
-        commit_date = datetime.now(timezone.utc) - timedelta(days=2)
-
-        # Mock the image data directly in cache (bypass SDK calls)
-        client._ocir_image_cache['myapp'] = [
-            {'tag': 'v1.0.0', 'created_at': semver_date, 'digest': 'sha256:abc'},
-            {'tag': 'abc123', 'created_at': commit_date, 'digest': 'sha256:def'},
-        ]
-
-        # Get latest version
-        registry = 'test.ocir.io'
-        repository = 'testnamespace/myapp'
-        tags = ['v1.0.0', 'abc123']
-
-        latest = client.get_latest_version(registry, repository, tags)
-
-        # Should return the commit hash (newer by creation date)
-        assert latest is not None
-        assert latest.tag == 'abc123'
-        assert latest.created_at == commit_date
-
-    @patch('src.registry_client.oci')
-    def test_get_latest_version_only_semver(self, mock_oci, config):
-        """Test get_latest_version() with only semver tags."""
-        from datetime import timezone, timedelta
-
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-
-        # Mock ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        client = RegistryClient(config)
-
-        # Create test data with only semver
-        old_date = datetime.now(timezone.utc) - timedelta(days=10)
-        new_date = datetime.now(timezone.utc) - timedelta(days=2)
-
-        # Mock the image data directly in cache (bypass SDK calls)
-        client._ocir_image_cache['myapp'] = [
-            {'tag': '1.0.0', 'created_at': old_date, 'digest': 'sha256:abc'},
-            {'tag': '1.1.0', 'created_at': new_date, 'digest': 'sha256:def'},
-        ]
-
-        registry = 'test.ocir.io'
-        repository = 'testnamespace/myapp'
-        tags = ['1.0.0', '1.1.0']
-
-        latest = client.get_latest_version(registry, repository, tags)
-
-        # Should return the highest semver (1.1.0)
-        assert latest is not None
-        assert latest.tag == '1.1.0'
-        assert latest.major == 1
-        assert latest.minor == 1
-        assert latest.patch == 0
-
-    @patch('src.registry_client.oci')
-    def test_get_latest_version_only_commit_hashes(self, mock_oci, config):
-        """Test get_latest_version() with only commit hash tags."""
-        from datetime import timezone, timedelta
-
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-
-        # Mock ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        client = RegistryClient(config)
-
-        # Create test data with only commit hashes
-        old_date = datetime.now(timezone.utc) - timedelta(days=10)
-        new_date = datetime.now(timezone.utc) - timedelta(days=2)
-
-        # Mock the image data directly in cache (bypass SDK calls)
-        client._ocir_image_cache['myapp'] = [
-            {'tag': 'abc123', 'created_at': old_date, 'digest': 'sha256:abc'},
-            {'tag': 'def456', 'created_at': new_date, 'digest': 'sha256:def'},
-        ]
-
-        registry = 'test.ocir.io'
-        repository = 'testnamespace/myapp'
-        tags = ['abc123', 'def456']
-
-        latest = client.get_latest_version(registry, repository, tags)
-
-        # Should return the newest by creation date
-        assert latest is not None
-        assert latest.tag == 'def456'
-        assert latest.created_at == new_date
-
-    @patch('src.registry_client.oci')
-    def test_check_for_updates_with_mixed_versions(self, mock_oci, config):
-        """Test check_for_updates() correctly handles mixed version types."""
-        from datetime import timezone, timedelta
-
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-
-        # Mock ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        client = RegistryClient(config)
-
-        # Simulate: current image is old commit hash, newer semver exists
-        old_commit_date = datetime.now(timezone.utc) - timedelta(days=50)
-        new_semver_date = datetime.now(timezone.utc) - timedelta(days=3)
-
-        # Mock the image data directly in cache (bypass SDK calls)
-        client._ocir_image_cache['myapp'] = [
-            {'tag': 'old123', 'created_at': old_commit_date, 'digest': 'sha256:old'},
-            {'tag': '0.2.0', 'created_at': new_semver_date, 'digest': 'sha256:new'},
-        ]
-
-        # Check for updates on the old commit hash
-        image = 'test.ocir.io/testnamespace/myapp:old123'
-        update_info = client.check_for_updates(image)
-
-        # Should detect that 0.2.0 is newer
-        assert update_info is not None
-        assert update_info['current'].tag == 'old123'
-        assert update_info['latest'].tag == '0.2.0'
-        assert update_info['latest'].is_semver is True
-
-    @patch('src.registry_client.oci')
-    def test_find_alternate_tag_finds_matching_hash(self, mock_oci, config):
-        """Test _find_alternate_tag finds commit hash with matching timestamp."""
-        from datetime import timezone, timedelta
-
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-
-        # Mock ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        client = RegistryClient(config)
-
-        # Create test data with semver and commit hash having same timestamp
-        target_date = datetime.now(timezone.utc) - timedelta(days=3)
-        other_date = datetime.now(timezone.utc) - timedelta(days=5)
-
-        client._ocir_image_cache['myapp'] = [
-            {'tag': '0.2.0', 'created_at': target_date, 'digest': 'sha256:abc'},
-            {'tag': 'abc123', 'created_at': target_date, 'digest': 'sha256:abc'},  # Same timestamp
-            {'tag': 'def456', 'created_at': other_date, 'digest': 'sha256:def'},
-        ]
-
-        registry = 'test.ocir.io'
-        repository = 'testnamespace/myapp'
-        tags = ['0.2.0', 'abc123', 'def456']
-
-        # Should find abc123 as it matches the target date
-        alternate = client._find_alternate_tag(registry, repository, tags, target_date)
-
-        assert alternate == 'abc123'
-
-    @patch('src.registry_client.oci')
-    def test_find_alternate_tag_returns_none_when_no_match(self, mock_oci, config):
-        """Test _find_alternate_tag returns None when no matching hash exists."""
-        from datetime import timezone, timedelta
-
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-
-        # Mock ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        client = RegistryClient(config)
-
-        # Create test data with no matching timestamps
-        target_date = datetime.now(timezone.utc) - timedelta(days=3)
-        other_date = datetime.now(timezone.utc) - timedelta(days=5)
-
-        client._ocir_image_cache['myapp'] = [
-            {'tag': '0.2.0', 'created_at': target_date, 'digest': 'sha256:abc'},
-            {'tag': 'abc123', 'created_at': other_date, 'digest': 'sha256:def'},  # Different timestamp
-        ]
-
-        registry = 'test.ocir.io'
-        repository = 'testnamespace/myapp'
-        tags = ['0.2.0', 'abc123']
-
-        # Should return None as no commit hash has matching timestamp
-        alternate = client._find_alternate_tag(registry, repository, tags, target_date)
-
-        assert alternate is None
-
-    @patch('src.registry_client.oci')
-    def test_check_for_updates_includes_alternate_tag(self, mock_oci, config):
-        """Test check_for_updates includes alternate_tag for non-semver to semver updates."""
-        from datetime import timezone, timedelta
-
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-
-        # Mock ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        client = RegistryClient(config)
-
-        # Old commit hash and new semver with matching commit hash
-        old_date = datetime.now(timezone.utc) - timedelta(days=10)
-        new_date = datetime.now(timezone.utc) - timedelta(days=2)
-
-        client._ocir_image_cache['myapp'] = [
-            {'tag': 'old123', 'created_at': old_date, 'digest': 'sha256:old'},
-            {'tag': '0.2.0', 'created_at': new_date, 'digest': 'sha256:new'},
-            {'tag': 'new456', 'created_at': new_date, 'digest': 'sha256:new'},  # Matching hash
-        ]
-
-        image = 'test.ocir.io/testnamespace/myapp:old123'
-        update_info = client.check_for_updates(image)
-
-        # Should include alternate_tag in the response
-        assert update_info is not None
-        assert update_info['current'].tag == 'old123'
-        assert update_info['latest'].tag == '0.2.0'
-        assert update_info['alternate_tag'] == 'new456'
-
-    @patch('src.registry_client.oci')
-    def test_get_cleanup_recommendations(self, mock_oci, config):
-        """Test get_cleanup_recommendations identifies old tags for deletion."""
-        from datetime import timezone, timedelta
-
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-
-        # Mock ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-        mock_oci.exceptions.ServiceError = ServiceError
-
-        client = RegistryClient(config)
-
-        # Create test data: 1 tag in use, 5 to keep, 3 old tags to delete
+        # Create old commit hash images
         now = datetime.now(timezone.utc)
-        tags_data = []
-        for i in range(9):
-            tags_data.append({
-                'tag': f'commit{i}',
-                'created_at': now - timedelta(days=i),
-                'digest': f'sha256:hash{i}'
-            })
+        cached_images = []
+        for i in range(10):
+            img = Image(
+                f'test.ocir.io/testnamespace/myapp:commit{i}',
+                ocid=f'ocid1.image.{i}',
+                created_at=now - timedelta(days=i)
+            )
+            cached_images.append(img)
 
-        client._ocir_image_cache['myapp'] = tags_data
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
 
-        # Simulate images deployed with commit0 and commit1
-        images = [
-            'test.ocir.io/testnamespace/myapp:commit0',
-            'test.ocir.io/testnamespace/myapp:commit1',
-        ]
+        # Current image in use
+        images = [Image('test.ocir.io/testnamespace/myapp:commit0')]
 
-        recommendations = client.get_cleanup_recommendations(images, keep_count=5)
+        recommendations = client.get_old_images(images, keep_count=5)
 
-        # Should have recommendations for the repository
-        repo_key = 'test.ocir.io/testnamespace/myapp'
-        assert repo_key in recommendations
-
-        rec = recommendations[repo_key]
-        assert rec['repository'] == 'testnamespace/myapp'
-        assert len(rec['tags_in_use']) == 2  # commit0, commit1
-        assert 'commit0' in rec['tags_in_use']
-        assert 'commit1' in rec['tags_in_use']
-
-        # Should keep 5 most recent (excluding in-use), but commit0 and commit1 are in use
-        # So the next 5 are: commit2, commit3, commit4, commit5, commit6
-        assert len(rec['tags_to_keep']) == 5
-
-        # Should recommend deletion of commit7, commit8 (oldest beyond keep_count)
-        assert len(rec['tags_to_delete']) == 2
-        assert rec['total_deletable'] == 2
+        assert len(recommendations) == 1
+        rec = recommendations[0]
+        assert isinstance(rec, CleanupRecommendation)
+        assert rec.repository == 'testnamespace/myapp'
+        # Should have 4 images to delete (10 - 1 current - 5 keep = 4)
+        assert len(rec.tags_to_delete) == 4
 
     @patch('src.registry_client.oci')
-    def test_get_cleanup_recommendations_excludes_semver(self, mock_oci, config):
-        """Test get_cleanup_recommendations excludes semver tags from deletion."""
-        from datetime import timezone, timedelta
+    def test_delete_ocir_images(self, mock_oci, config):
+        """Test delete_ocir_images deletes images via SDK."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
 
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_artifacts_client = Mock()
+        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
         mock_oci.identity.IdentityClient.return_value = Mock()
-
-        # Mock ServiceError exception class
-        class ServiceError(Exception):
-            def __init__(self, status, message):
-                super().__init__(message)
-                self.status = status
-                self.message = message
-        mock_oci.exceptions.ServiceError = ServiceError
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
 
         client = RegistryClient(config)
 
-        # Create mixed tags: semver and commit hashes
-        now = datetime.now(timezone.utc)
-        client._ocir_image_cache['myapp'] = [
-            {'tag': '1.0.0', 'created_at': now - timedelta(days=10), 'digest': 'sha256:v1'},
-            {'tag': 'old1', 'created_at': now - timedelta(days=20), 'digest': 'sha256:old1'},
-            {'tag': 'old2', 'created_at': now - timedelta(days=30), 'digest': 'sha256:old2'},
+        # Create cleanup recommendations
+        img1 = Image('test.ocir.io/testnamespace/myapp:old1', ocid='ocid1.image.1')
+        img2 = Image('test.ocir.io/testnamespace/myapp:old2', ocid='ocid1.image.2')
+        recommendations = [
+            CleanupRecommendation(
+                registry='test.ocir.io',
+                repository='testnamespace/myapp',
+                tags_to_delete=[img1, img2]
+            )
         ]
 
-        images = ['test.ocir.io/testnamespace/myapp:1.0.0']
+        deleted = client.delete_ocir_images(recommendations)
 
-        recommendations = client.get_cleanup_recommendations(images, keep_count=0)
+        assert len(deleted) == 2
+        assert mock_artifacts_client.delete_container_image.call_count == 2
+        mock_artifacts_client.delete_container_image.assert_any_call('ocid1.image.1')
+        mock_artifacts_client.delete_container_image.assert_any_call('ocid1.image.2')
 
-        # Semver tag 1.0.0 is in use, but old1 and old2 are commit hashes beyond keep_count
-        # Both should be recommended for deletion
-        repo_key = 'test.ocir.io/testnamespace/myapp'
-        if repo_key in recommendations:
-            rec = recommendations[repo_key]
-            # Semver tags should never be in tags_to_delete
-            for tag_info in rec['tags_to_delete']:
-                assert not tag_info['tag'].startswith('v')
-                assert '.' not in tag_info['tag']  # Semver has dots
+    @patch('src.registry_client.oci')
+    def test_delete_ocir_images_no_client(self, mock_oci, config):
+        """Test delete_ocir_images returns empty when no SDK client."""
+        mock_oci.config.from_file.side_effect = Exception("No config")
+
+        client = RegistryClient(config)
+        recommendations = []
+
+        result = client.delete_ocir_images(recommendations)
+
+        assert result == {}

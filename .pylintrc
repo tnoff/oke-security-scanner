@@ -23,7 +23,7 @@ disable=
     line-too-long,
     logging-fstring-interpolation,
     broad-exception-caught,
-    import-error
+    too-many-return-statements,
 
 [FORMAT]
 # Maximum number of characters on a single line

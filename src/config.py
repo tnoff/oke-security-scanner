@@ -8,12 +8,6 @@ from dataclasses import dataclass
 class Config:
     """Application configuration from environment variables."""
 
-    # OCIR credentials (same as github-workflows/ocir-push.yml)
-    oci_registry: str
-    oci_username: str
-    oci_token: str
-    oci_namespace: str
-
     # OTLP configuration
     otlp_endpoint: str
     otlp_insecure: bool
@@ -35,23 +29,18 @@ class Config:
     # OCIR cleanup configuration
     ocir_cleanup_enabled: bool
     ocir_cleanup_keep_count: int
+    ocir_extra_repositories: list[str]
 
     @classmethod
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
         return cls(
-            # OCIR credentials
-            oci_registry=os.getenv("OCI_REGISTRY", ""),
-            oci_username=os.getenv("OCI_USERNAME", ""),
-            oci_token=os.getenv("OCI_TOKEN", ""),
-            oci_namespace=os.getenv("OCI_NAMESPACE", ""),
-
             # OTLP configuration
             otlp_endpoint=os.getenv("OTLP_ENDPOINT", "http://localhost:4317"),
             otlp_insecure=os.getenv("OTLP_INSECURE", "true").lower() == "true",
-            otlp_traces_enabled=os.getenv("OTLP_TRACES_ENABLED", "true").lower() == "true",
-            otlp_metrics_enabled=os.getenv("OTLP_METRICS_ENABLED", "true").lower() == "true",
-            otlp_logs_enabled=os.getenv("OTLP_LOGS_ENABLED", "true").lower() == "true",
+            otlp_traces_enabled=os.getenv("OTLP_TRACES_ENABLED", "false").lower() == "true",
+            otlp_metrics_enabled=os.getenv("OTLP_METRICS_ENABLED", "false").lower() == "true",
+            otlp_logs_enabled=os.getenv("OTLP_LOGS_ENABLED", "false").lower() == "true",
 
             # Trivy configuration
             trivy_severity=os.getenv("TRIVY_SEVERITY", "CRITICAL,HIGH"),
@@ -67,17 +56,6 @@ class Config:
             # OCIR cleanup configuration
             ocir_cleanup_enabled=os.getenv("OCIR_CLEANUP_ENABLED", "false").lower() == "true",
             ocir_cleanup_keep_count=int(os.getenv("OCIR_CLEANUP_KEEP_COUNT", "5")),
+            # Comma separated list of extra repos
+            ocir_extra_repositories=os.getenv('OCIR_EXTRA_REPOSITORIES', "").split(','),
         )
-
-    def validate(self) -> None:
-        """Validate required configuration."""
-        required = {
-            "OCI_REGISTRY": self.oci_registry,
-            "OCI_USERNAME": self.oci_username,
-            "OCI_TOKEN": self.oci_token,
-            "OCI_NAMESPACE": self.oci_namespace,
-        }
-
-        missing = [key for key, value in required.items() if not value]
-        if missing:
-            raise ValueError(f"Missing required environment variables: {', '.join(missing)}")

@@ -4,117 +4,51 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 
 ## Features
 
-- 🔍 **Automatic Discovery** - Queries Kubernetes API to find all deployed images
-- 🛡️ **Trivy Scanner** - Industry-standard vulnerability scanner with daily DB updates
-- 🔄 **Version Update Detection** - Identifies outdated images (semver & commit hash) across multiple registries
-- 🧹 **OCIR Cleanup** - Automatically identifies and optionally deletes old commit hash tags
-- 📊 **OTLP Observability** - Sends logs, traces, and metrics to your LGTM stack
-- 🔐 **Multi-Registry Support** - Works with OCIR, Docker Hub, and GitHub Container Registry
-- 🎯 **Namespace Filtering** - Scan specific namespaces or exclude system namespaces
+| Feature | OKE Specific | Description |
+| ------- | ------------ | ----------- |
+| Security Scanner | No | Fetches all images in K8s cluster and runs trivy scanner |
+| Image Update Report | No | Checks for new versions of deployed images |
+| Image Cleanup | Yes | Cleanup OCIR images that do not match semver versioning |
 
-## Architecture
+## Install and Usage
+
+Install the requirements locally and run
 
 ```
-┌──────────────────────────────────────┐
-│   Kubernetes CronJob                 │
-│   ┌──────────────────────────────┐   │
-│   │  Security Scanner            │   │
-│   │  ┌───────────────────────┐   │   │
-│   │  │ 1. Update Trivy DB    │   │   │
-│   │  │    (latest CVEs)      │   │   │
-│   │  └───────────────────────┘   │   │
-│   │  ┌───────────────────────┐   │   │
-│   │  │ 2. Query K8s API      │   │   │
-│   │  │    (discover images)  │   │   │
-│   │  └───────────────────────┘   │   │
-│   │  ┌───────────────────────┐   │   │
-│   │  │ 3. Scan Vulnerabilities│  │   │
-│   │  │    (Trivy)            │   │   │
-│   │  └───────────────────────┘   │   │
-│   │  ┌───────────────────────┐   │   │
-│   │  │ 4. Check for Updates  │   │   │
-│   │  │    - Query registries │   │   │
-│   │  │    - Compare versions │   │   │
-│   │  └───────────────────────┘   │   │
-│   │  ┌───────────────────────┐   │   │
-│   │  │ 5. OCIR Cleanup       │   │   │
-│   │  │    - Find old tags    │   │   │
-│   │  │    - Delete (optional)│   │   │
-│   │  └───────────────────────┘   │   │
-│   │  ┌───────────────────────┐   │   │
-│   │  │ 6. Send OTLP          │   │   │
-│   │  │    - Logs (Loki)      │   │   │
-│   │  │    - Traces (Tempo)   │   │   │
-│   │  │    - Metrics (Mimir)  │   │   │
-│   │  └───────────────────────┘   │   │
-│   └──────────────────────────────┘   │
-└──────────────────────────────────────┘
+$ pip install requirements.txt
+$ python -m src.main
 ```
 
-## Prerequisites
+Or use the docker build
 
-- Kubernetes cluster (OKE)
-- **OCI SDK Configuration**: For OCIR image version checking and cleanup, the scanner requires OCI credentials configured at `~/.oci/config` or via environment variables
-  - Required for: Listing OCIR images, checking version updates, and deleting old tags
-  - Authentication methods: API key, instance principal, or resource principal
-  - See [OCI SDK Configuration](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/sdkconfig.htm) for setup details
-- **OCI IAM Permissions**: The OCI user/principal requires these permissions:
-  - `inspect compartments in tenancy` - Required to search for repositories across compartments
-  - `manage repos in compartment <compartment-name>` - Required for each compartment containing OCIR repositories
-    - Enables listing images and version checking
-    - Enables deleting old image tags when OCIR cleanup is enabled
-  - See [OCI IAM Policies](https://docs.oracle.com/en-us/iaas/Content/Registry/Concepts/registrypolicyreference.htm) for OCIR policy reference
-- OTLP collector endpoint (Tempo for traces, Loki for logs, Mimir for metrics)
-- Kubernetes RBAC permissions to read pods and namespaces
-
-## Quick Start
-
-**Note:** The files in the `k8s/` folder are examples. Review and customize them for your environment before deploying.
-
-### 1. Create Kubernetes Secret
-
-```bash
-kubectl create secret generic security-scanner-secrets \
-  --from-literal=OCI_REGISTRY="iad.ocir.io" \
-  --from-literal=OCI_USERNAME="your-tenancy/your-username" \
-  --from-literal=OCI_TOKEN="your-auth-token" \
-  --from-literal=OCI_NAMESPACE="your-namespace" \
-  --from-literal=OTLP_ENDPOINT="http://tempo.monitoring.svc.cluster.local:4317" \
-  --from-literal=OTLP_INSECURE="true" \
-  --from-literal=TRIVY_SEVERITY="CRITICAL,HIGH" \
-  --from-literal=TRIVY_TIMEOUT="300" \
-  --from-literal=EXCLUDE_NAMESPACES="kube-system,kube-public,kube-node-lease" \
-  --from-literal=DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your-webhook-url" \
-  --namespace=default
+```
+$ docker build .
 ```
 
-Or use the example file:
+## Authentication
 
-```bash
-cp k8s/secret-example.yaml k8s/secret.yaml
-# Edit k8s/secret.yaml with your values
-kubectl apply -f k8s/secret.yaml
+### Kubernetes
+For kubernetes auth, you can use local auth creds or give a pod permissions to view the deployed images. See the [k8s](./k8s) folder for example auth roles.
+
+### OCI SDK
+
+The scanner uses the OCI Python SDK for OCIR operations. It automatically derives:
+- **OCI Registry URL** from the region in your OCI config (e.g., `us-ashburn-1` → `iad.ocir.io`)
+- **OCI Namespace** from the Object Storage API
+
+Configure your OCI credentials in `~/.oci/config`:
+
+```ini
+[DEFAULT]
+user=ocid1.user.oc1..your-user-ocid
+fingerprint=your:fingerprint:here
+tenancy=ocid1.tenancy.oc1..your-tenancy-ocid
+region=us-ashburn-1
+key_file=~/.oci/oci_api_key.pem
 ```
 
-### 2. Deploy RBAC and CronJob
-
-```bash
-# Apply RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)
-kubectl apply -f k8s/rbac.yaml
-
-# Deploy CronJob
-kubectl apply -f k8s/cronjob.yaml
-```
-
-### 3. Test Manual Run
-
-```bash
-# Trigger a manual scan
-kubectl create job --from=cronjob/security-scanner manual-scan-$(date +%s)
-
-# Watch logs
-kubectl logs -f job/manual-scan-<timestamp>
-```
+### Trivy
+Trivy will use Docker credentials from `~/.docker/config.json` to pull images for scanning.
 
 ## Configuration
 
@@ -124,298 +58,28 @@ All configuration is provided via Kubernetes secrets as environment variables:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OCI_REGISTRY` | ✅ | - | OCIR URL (e.g., `iad.ocir.io`) |
-| `OCI_USERNAME` | ✅ | - | OCIR username (`tenancy/username`) |
-| `OCI_TOKEN` | ✅ | - | OCIR auth token |
-| `OCI_NAMESPACE` | ✅ | - | OCIR namespace |
-| `OTLP_ENDPOINT` | ❌ | `http://localhost:4317` | OTLP collector endpoint |
-| `OTLP_INSECURE` | ❌ | `true` | Use insecure gRPC connection |
-| `OTLP_TRACES_ENABLED` | ❌ | `true` | Enable OTLP trace export |
-| `OTLP_METRICS_ENABLED` | ❌ | `true` | Enable OTLP metrics export |
-| `OTLP_LOGS_ENABLED` | ❌ | `true` | Enable OTLP logs export |
-| `TRIVY_SEVERITY` | ❌ | `CRITICAL,HIGH` | Vulnerability severities to report |
-| `TRIVY_TIMEOUT` | ❌ | `300` | Scan timeout in seconds |
-| `SCAN_NAMESPACES` | ❌ | (all) | Comma-separated namespaces to scan |
-| `EXCLUDE_NAMESPACES` | ❌ | `kube-system,...` | Namespaces to exclude |
-| `DISCORD_WEBHOOK_URL` | ❌ | (disabled) | Discord webhook URL for scan notifications |
-| `OCIR_CLEANUP_ENABLED` | ❌ | `false` | Enable automatic deletion of old OCIR commit hash tags |
-| `OCIR_CLEANUP_KEEP_COUNT` | ❌ | `5` | Number of recent commit hash tags to keep per repository |
+| `OTLP_ENDPOINT` | No | `http://localhost:4317` | OTLP collector endpoint |
+| `OTLP_INSECURE` | No | `true` | Use insecure gRPC connection |
+| `OTLP_TRACES_ENABLED` | No | `true` | Enable OTLP trace export |
+| `OTLP_METRICS_ENABLED` | No | `true` | Enable OTLP metrics export |
+| `OTLP_LOGS_ENABLED` | No | `true` | Enable OTLP logs export |
+| `TRIVY_SEVERITY` | No | `CRITICAL,HIGH` | Vulnerability severities to report |
+| `TRIVY_TIMEOUT` | No | `300` | Scan timeout in seconds |
+| `SCAN_NAMESPACES` | No | (all) | Comma-separated namespaces to scan |
+| `EXCLUDE_NAMESPACES` | No | `kube-system,...` | Namespaces to exclude |
+| `DISCORD_WEBHOOK_URL` | No | (disabled) | Discord webhook URL for scan notifications |
+| `OCIR_CLEANUP_ENABLED` | No | `false` | Enable automatic deletion of old OCIR commit hash tags |
+| `OCIR_CLEANUP_KEEP_COUNT` | No | `5` | Number of recent commit hash tags to keep per repository |
+| `OCIR_EXTRA_REPOSITORIES` | No | `''` | Check extra repos for old images to remove |
 
-### CronJob Schedule
 
-Edit `k8s/cronjob.yaml` to change the scan schedule:
-
-```yaml
-spec:
-  schedule: "0 2 * * *"  # Daily at 2 AM UTC
-```
-
-Common schedules:
-- `0 2 * * *` - Daily at 2 AM
-- `0 */6 * * *` - Every 6 hours
-- `0 0 * * 0` - Weekly on Sunday
-
-## Observability
-
-### Logs (Loki)
-
-Structured JSON logs include:
-- Image name and scan results
-- Critical vulnerabilities with CVE IDs
-- Scan duration and status
-- Database update status
-
-Query examples:
-```logql
-{app="security-scanner"} | json | severity = "CRITICAL"
-{app="security-scanner"} | json | image =~ "discord-bot.*"
-```
-
-### Traces (Tempo)
-
-Distributed traces show:
-- Root span: `security-scan` (entire scan operation)
-- Child spans: `scan-image` (per image)
-- Sub-spans: `update-trivy-db`, `get-cluster-images`
-
-### Metrics (Mimir/Prometheus)
-
-Single gauge metric tracking current vulnerability counts per image:
-
-```promql
-# Current vulnerability count per image
-image_scan{image="discord-bot:abc1234", severity="critical"}
-image_scan{image="discord-bot:abc1234", severity="high"}
-
-# Example queries:
-# Images with critical vulnerabilities
-image_scan{severity="critical"} > 0
-
-# Total critical vulnerabilities across all images
-sum(image_scan{severity="critical"})
-
-# Images with the most critical vulnerabilities
-topk(5, image_scan{severity="critical"})
-```
-
-### Grafana Dashboards
-
-Create dashboards showing:
-- Vulnerability trends over time
-- Images with most critical CVEs
-- Scan success rate
-- Trivy DB freshness
-
-## Discord Notifications
-
-The scanner sends comprehensive scan results to Discord via webhooks in **up to three message blocks**. This is optional and enabled when `DISCORD_WEBHOOK_URL` is configured.
-
-### Message Block 1: Vulnerability Scan Results
-
-- **Summary**: Scan duration, image count, vulnerability counts
-- **Critical Vulnerabilities Table**: Shows CRITICAL CVEs with available fixes
-- **CSV Attachment**: Complete report with vulnerabilities, version updates, and OCIR cleanup recommendations
-
-### Message Block 2: Version Update Results
-
-- **Update Summary**: Counts of minor/patch and major updates available
-- **Minor/Patch Updates Table**: Non-breaking updates for easy deployment
-- **Note**: MAJOR updates excluded from message (see CSV for full report)
-
-### Message Block 3: OCIR Cleanup Recommendations
-
-- **Cleanup Summary**: Repositories with deletable tags and total count
-- **Cleanup Table**: Shows tags in use, tags to keep, tags to delete, and oldest tag age
-- **Note**: Sent as a separate message after version updates
-
-### Features
-
-- Up to three separate message blocks for clarity (vulnerabilities, updates, cleanup)
-- Critical vulnerabilities **with available fixes** displayed for immediate action
-- Version updates categorized as MAJOR, Minor, Patch, or Commit Hash
-- OCIR cleanup recommendations showing deletable tags with age information
-- CSV includes vulnerabilities, version updates, **and** cleanup recommendations in separate sections
-- Semver parsing for proper version comparison (v1.2.3 format)
-- Commit hash comparison by image creation date
-- Multi-registry support (OCIR, Docker Hub, GitHub Container Registry)
-- Non-blocking: webhook failures don't affect scan execution
-
-### Setup
-
-1. Create a Discord webhook in your server:
-   - Go to Server Settings > Integrations > Webhooks
-   - Click "New Webhook"
-   - Copy the webhook URL
-
-2. Add the webhook URL to your Kubernetes secret:
-   ```bash
-   kubectl create secret generic security-scanner-secrets \
-     --from-literal=DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your-webhook-url" \
-     # ... other configuration ...
-   ```
-
-3. The scanner will automatically send notifications after each scan completes
-
-### Example Output
-
-**Message Block 1 - Vulnerabilities:**
-```
-Security Scan Complete
-Scanned: 25 images in 142.3s
-Critical: 3 | High: 12
-
-CRITICAL Vulnerabilities:
-```Image                         || CVE                 || Fixed
--------------------------------------------------------------
-discord-bot:v1.0.0            || CVE-2023-1234       || 1.2.3```
-```
-
-**Message Block 2 - Version Updates:**
-```
-Image Version Updates
-Minor/Patch: 5 | Major: 2
-(Major updates excluded below, see CSV for full report)
-
-Minor/Patch Updates Available:
-```Image                         || Current        || Latest         || Type
--------------------------------------------------------------------------
-discord-bot:v1.0.0            || 1.0.0          || 1.2.0          || minor
-backup-tool:abc123            || abc123         || def456         || newer```
-```
-
-**CSV Sections:**
-- **Vulnerabilities**: All CVEs with severity and fix information
-- **Version Updates**: All updates (MAJOR + minor/patch) with age and version diff
-- **OCIR Cleanup Recommendations**: All deletable tags with creation date, age, and status (In Use, Keep, or Can Delete)
-
-## OCIR Cleanup
-
-The scanner can identify and optionally delete old commit hash tags from OCIR repositories to save storage space. This feature is **disabled by default** and requires explicit configuration.
-
-### How It Works
-
-1. **Identification**: For each OCIR repository, the scanner:
-   - Identifies all commit hash tags (non-semver tags)
-   - Excludes tags currently in use by deployed containers
-   - Keeps the N most recent commit hash tags (default: 5)
-   - Marks older commit hash tags for deletion
-   - **Never** deletes semver tags or the 'latest' tag
-
-2. **Reporting**: Cleanup recommendations are:
-   - Logged to console with repository, tag count, and oldest tag age
-   - Included in Discord notifications as a separate message block
-   - Exported in the CSV file with full tag details
-
-3. **Deletion** (optional): When `OCIR_CLEANUP_ENABLED=true`:
-   - Automatically deletes tags marked for cleanup
-   - Logs success/failure for each deletion
-   - Reports summary of deleted and failed tags
-
-### Configuration
-
-Enable cleanup by adding these environment variables to your Kubernetes secret:
-
-```bash
-kubectl create secret generic security-scanner-secrets \
-  --from-literal=OCIR_CLEANUP_ENABLED="true" \
-  --from-literal=OCIR_CLEANUP_KEEP_COUNT="5" \
-  # ... other configuration ...
-```
-
-### Safety Features
-
-- **Disabled by default** - Requires explicit `OCIR_CLEANUP_ENABLED=true`
-- **Never deletes semver tags** - Only commit hash tags are candidates for cleanup
-- **Preserves in-use tags** - Tags currently deployed in the cluster are always kept
-- **Keeps recent tags** - The N most recent commit hash tags are preserved
-- **Detailed logging** - Every deletion attempt is logged with success/failure status
-- **Non-blocking** - Deletion failures are logged but don't stop the scan
-
-### Example Output
-
-**Console Log:**
-```
-Checking for OCIR cleanup recommendations...
-✓ Found 3 repositories with old tags
-
-OCIR Cleanup Recommendations
-Repository: namespace/myapp
-  Tags in use (will keep):        2
-  Recent tags to keep:            5
-  Old tags recommended for deletion: 8
-  Oldest tags:
-    - abc1234 (365 days old)
-    - def5678 (340 days old)
-    ...
-
-OCIR cleanup enabled - deleting old images...
-Deleting namespace/myapp:abc1234 (age: 365 days)
-  └─ ✓ Successfully deleted namespace/myapp:abc1234
-Deletion complete: 8 images deleted, 0 failed
-```
-
-### Required Permissions
+## Required Permissions
 
 To enable OCIR cleanup, the OCI user/principal must have the `manage repos in compartment <name>` permission for each compartment containing OCIR repositories. See the Prerequisites section for full IAM policy details.
 
-## Development
 
-### Local Testing
+## Reporting
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+Logs enabled to console by default, traces and metrics can also be enabled through OTLP.
 
-# Set environment variables
-export OCI_REGISTRY="iad.ocir.io"
-export OCI_USERNAME="tenancy/username"
-export OCI_TOKEN="your-token"
-export OCI_NAMESPACE="namespace"
-
-# Run locally (requires kubectl access to cluster)
-python -m src.main
-```
-
-### Building the Image
-
-```bash
-# Build locally
-docker build -t oke-security-scanner:dev .
-
-# Test locally
-docker run --rm \
-  -v ~/.kube/config:/home/scanner/.kube/config:ro \
-  -e OCI_REGISTRY="iad.ocir.io" \
-  -e OCI_USERNAME="tenancy/username" \
-  -e OCI_TOKEN="token" \
-  -e OCI_NAMESPACE="namespace" \
-  oke-security-scanner:dev
-```
-
-### Code Quality
-
-```bash
-# Install test dependencies
-pip install -r test-requirements.txt
-
-# Run pylint on all source files
-pylint src/
-
-# Run pylint on specific file
-pylint src/scanner.py
-
-# Run tox to test across multiple Python versions (3.11, 3.12, 3.13)
-tox
-
-# Run tox for specific Python version
-tox -e py313
-```
-
-Pylint configuration is in `.pylintrc` with project-specific settings to match the codebase style. Tox configuration is in `tox.ini`.
-
-### Continuous Integration
-
-GitHub Actions automatically runs CI checks on pull requests and pushes to main:
-- **Linting**: Runs pylint across Python 3.11, 3.12, and 3.13
-- **Tox**: Executes tox test suite
-- **Docker Build**: Verifies the Docker image builds successfully
+Discord webhook can also be provded to send a readable report as well.

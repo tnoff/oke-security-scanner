@@ -32,18 +32,25 @@ The project uses **Option 3** for Trivy management:
 
 **Why:** Balances having latest CVE data with stable scanner binary and graceful degradation.
 
-### OCIR Authentication
-OKE clusters do **NOT** support standard Kubernetes service accounts for image pulls. Therefore:
-- OCIR credentials are stored in Kubernetes secrets
-- Credentials are mounted as environment variables
-- Format: `${OCI_USERNAME}` = `tenancy/username`, `${OCI_TOKEN}` = auth token
-- Same credentials used for image pushes in the related `github-workflows` repository
+### OCI SDK Authentication
+The scanner uses the OCI Python SDK for all OCIR operations:
 
-**Version Checking:**
-- Uses OCI Python SDK (`oci==2.164.2`) instead of HTTP API
-- Requires OCI SDK configuration at `~/.oci/config` or via environment variables
+**Configuration:**
+- Uses OCI SDK configuration from `~/.oci/config` (standard OCI config file)
 - Authenticates via `oci.config.from_file()` for config file authentication
-- More reliable than HTTP Basic auth and provides better performance
+- No environment variables needed for OCI credentials
+
+**Automatic Derivation:**
+- **OCI Registry URL**: Derived from the `region` in OCI config (e.g., `us-ashburn-1` → `iad.ocir.io`)
+  - Uses `oci.regions.REGIONS_SHORT_NAMES` mapping
+- **OCI Namespace**: Fetched from Object Storage API via `object_client.get_namespace()`
+- Both values are cached after first retrieval for performance
+
+**Benefits:**
+- More reliable than HTTP Basic auth
+- Better performance (single API call with all metadata)
+- Standard OCI authentication patterns
+- No secrets needed in Kubernetes for OCIR access
 
 ### OpenTelemetry Pattern
 **Critical:** All modules follow a consistent OTLP integration pattern:
@@ -115,8 +122,7 @@ oke-security-scanner/
 │   ├── telemetry.py         # OpenTelemetry setup (traces, metrics, logs)
 │   ├── k8s_client.py        # Kubernetes API client for image discovery
 │   ├── scanner.py           # Trivy scanner wrapper
-│   ├── registry_client.py   # Multi-registry client for version checking
-│   ├── version_reporter.py  # Version update report generation
+│   ├── registry_client.py   # Multi-registry client for version checking & OCIR operations
 │   └── discord_notifier.py  # Discord webhook notifications
 ├── k8s/                  # Kubernetes manifests (EXAMPLES - customize before use)
 │   ├── rbac.yaml         # ServiceAccount, ClusterRole, ClusterRoleBinding
@@ -204,15 +210,11 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 **Purpose:** Configuration from environment variables
 
 **Environment variables:**
-- `OCI_REGISTRY` - OCIR URL (e.g., iad.ocir.io)
-- `OCI_USERNAME` - OCIR username (format: tenancy/username)
-- `OCI_TOKEN` - OCIR auth token
-- `OCI_NAMESPACE` - OCIR namespace
 - `OTLP_ENDPOINT` - OTLP collector endpoint (default: http://localhost:4317)
 - `OTLP_INSECURE` - Use insecure connection (default: true)
-- `OTLP_TRACES_ENABLED` - Enable OTLP trace export (default: true)
-- `OTLP_METRICS_ENABLED` - Enable OTLP metrics export (default: true)
-- `OTLP_LOGS_ENABLED` - Enable OTLP logs export (default: true)
+- `OTLP_TRACES_ENABLED` - Enable OTLP trace export (default: false)
+- `OTLP_METRICS_ENABLED` - Enable OTLP metrics export (default: false)
+- `OTLP_LOGS_ENABLED` - Enable OTLP logs export (default: false)
 - `TRIVY_SEVERITY` - Severities to report (default: CRITICAL,HIGH)
 - `TRIVY_TIMEOUT` - Scan timeout in seconds (default: 300)
 - `SCAN_NAMESPACES` - Comma-separated namespaces to scan (optional)
@@ -220,23 +222,24 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 - `DISCORD_WEBHOOK_URL` - Discord webhook URL for scan notifications (optional)
 - `OCIR_CLEANUP_ENABLED` - Enable automatic deletion of old OCIR commit hash tags (default: false)
 - `OCIR_CLEANUP_KEEP_COUNT` - Number of recent commit hash tags to keep per repository (default: 5)
+- `OCIR_EXTRA_REPOSITORIES` - Comma-separated list of extra repos to check for cleanup (optional)
 
-**Validation:** The `validate()` method checks required fields are present.
+**Note:** OCI credentials (registry URL, namespace) are derived from OCI SDK config (`~/.oci/config`), not environment variables.
 
 ### src/registry_client.py
 **Purpose:** Multi-registry client for checking image version updates
 
+**Key properties:**
+- `oci_registry` - OCI registry URL derived from OCI config region (e.g., `iad.ocir.io`)
+- `oci_namespace` - OCI namespace fetched from Object Storage API
+
 **Key methods:**
-- `check_for_updates(image)` - Checks if newer version exists for given image
-- `get_image_tags(registry, repository)` - Fetches all tags from registry API
-- `get_image_creation_date(registry, repository, tag)` - Gets image creation date (from cache or manifest)
-- `parse_image_name(image)` - Parses image into registry, repository, and tag components
-- `parse_version(tag)` - Parses semver or commit hash tags
-- `get_latest_version(registry, repository, tags)` - Determines latest available version
-- `_get_ocir_images_via_sdk(repository)` - Fetches OCIR images using OCI SDK with caching
-- `get_cleanup_recommendations(images, keep_count)` - Identifies old OCIR commit hash tags for deletion
+- `check_image_updates(image)` - Checks if newer version exists for given image
+- `get_image_versions(image)` - Fetches all versions/tags from registry API
+- `_strip_namespace_prefix(repository)` - Strips OCI namespace prefix from repository names
+- `_get_ocir_images_via_sdk(image)` - Fetches OCIR images using OCI SDK with caching
+- `get_old_images(images, keep_count)` - Identifies old OCIR commit hash tags for deletion
 - `delete_ocir_images(cleanup_recommendations)` - Deletes old OCIR images by OCID
-- `_delete_repository_tags(repository, tags_to_delete)` - Helper for deleting tags from a single repository
 
 **Supported registries:**
 - **OCIR**: Oracle Container Image Registry (authenticated via OCI SDK with config file)
@@ -274,25 +277,6 @@ trivy image --format json --severity <severities> --timeout <timeout> --quiet <i
 - `delete_ocir_images()` deletes tags by OCID using `artifacts_client.delete_container_image()`
 - `_delete_repository_tags()` handles deletion for a single repository (finds OCIDs, deletes, logs results)
 - Deletion is disabled by default (requires `OCIR_CLEANUP_ENABLED=true`)
-
-### src/version_reporter.py
-**Purpose:** Generate formatted reports for image version updates and OCIR cleanup recommendations
-
-**VersionReporter class:**
-- `generate_report(update_results)` - Creates formatted console report with MAJOR and minor/patch sections
-- `log_summary(update_results)` - Logs summary of update check results
-- `_format_update_entry(result)` - Formats individual update entry with version diff
-
-**CleanupReporter class:**
-- `generate_report(cleanup_recommendations)` - Creates formatted console report for OCIR cleanup
-- `log_summary(cleanup_recommendations)` - Logs summary of cleanup recommendations
-- Shows repository name, tag counts (in use, to keep, deletable), and oldest tags with age
-
-**Report structure:**
-- **MAJOR VERSION UPDATES**: Breaking changes expected (sorted by image)
-- **Minor/Patch Version Updates**: Non-breaking updates (sorted by image)
-- **OCIR Cleanup Recommendations**: Old tags to delete with age information (sorted by repository)
-- Shows current vs latest version, version differences, and age for commit hashes
 
 ### src/discord_notifier.py
 **Purpose:** Send scan result notifications to Discord webhooks in up to three message blocks
