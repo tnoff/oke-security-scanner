@@ -418,6 +418,7 @@ class RegistryClient:
     def get_old_images(self, images: list[Image], keep_count: int = 5,
                        extra_repositories: list[str] = None) -> list[CleanupRecommendation]:
         '''Return report of images that can be deleted'''
+        repo_names_processed = []
         extra_repositories = extra_repositories or []
         with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_old_images'):
             recommendations = []
@@ -425,6 +426,8 @@ class RegistryClient:
                 logger.info(f'Scanning extra repo {extra_repo} in old image scan')
                 images.add(Image(f'{self.oci_registry}/{extra_repo}:latest'))
             for image in images:
+                if f'{image.registry}/{image.repo_name}' in repo_names_processed:
+                    continue
                 logger.info(f'Scanning for versions of {image} that can be deleted')
                 if not image.is_ocir_image:
                     continue
@@ -438,6 +441,7 @@ class RegistryClient:
                     continue
                 filtered_images = filtered_images[0:len(filtered_images) - keep_count]
                 recommendations.append(CleanupRecommendation(image.registry, image.repo_name, filtered_images))
+                repo_names_processed.append(f'{image.registry}/{image.repo_name}')
 
             return recommendations
 
