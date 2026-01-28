@@ -16,8 +16,8 @@ from .config import Config
 logger = getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
-# Semver regex pattern (supports v1.2.3 or 1.2.3 format)
-SEMVER_PATTERN = re.compile(r'^v?(\d+)\.(\d+)\.(\d+).*')
+# Semver regex pattern (supports v1.2.3 or 1.2.3 format, or 3.4)
+SEMVER_PATTERN = re.compile(r'^v?(\d+)\.(\d+)\.?(\d+)?.*')
 
 OTEL_PREFIX = 'k8s'
 
@@ -78,11 +78,19 @@ class Image:
         match = SEMVER_PATTERN.match(self.tag)
 
         if match:
+            # Patch is an optional parameter
+            patch = 0
+            try:
+                patch = int(match.group(3))
+            except TypeError:
+                pass
+            if not patch:
+                patch = 0
             return ImageVersion(
                 tag=self.tag,
                 major=int(match.group(1)),
                 minor=int(match.group(2)),
-                patch=int(match.group(3)),
+                patch=patch,
                 is_semver=True,
             )
 
