@@ -51,7 +51,7 @@ class DiscordNotifier:
             DapperTableHeader('CVE', 16),
             DapperTableHeader('Fixed', 32)
             ]), pagination_options=PaginationLength(self.max_length), enclosure_end='```', enclosure_start='```',
-                prefix='### Critical CVEs with Fixes')
+                prefix='### Critical CVEs with Fixes\n')
 
         # Build csv
         output = StringIO()
