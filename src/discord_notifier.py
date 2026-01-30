@@ -47,7 +47,7 @@ class DiscordNotifier:
 
 
         critical_fixed_table = DapperTable(header_options=DapperTableHeaderOptions([
-            DapperTableHeader('Image', 32),
+            DapperTableHeader('Image', 64),
             DapperTableHeader('CVE', 16),
             DapperTableHeader('Fixed', 32)
             ]), pagination_options=PaginationLength(self.max_length), enclosure_end='```', enclosure_start='```',
