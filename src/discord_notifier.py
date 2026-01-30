@@ -49,7 +49,8 @@ class DiscordNotifier:
         critical_fixed_table = DapperTable(header_options=DapperTableHeaderOptions([
             DapperTableHeader('Image', 32),
             DapperTableHeader('CVE', 16),
-            DapperTableHeader('Fixed', 32)
+            DapperTableHeader('Package', 16),
+            DapperTableHeader('Fixed', 16)
             ]), pagination_options=PaginationLength(self.max_length), enclosure_end='```', enclosure_start='```',
                 prefix='### Critical CVEs with Fixes\n')
 
@@ -57,18 +58,20 @@ class DiscordNotifier:
         output = StringIO()
         writer = csv.writer(output)
 
-        writer.writerow(["Image", "CVE", "Severity", "Fixed Version"])
+        writer.writerow(["Image", "CVE", "Severity", "Package", "Fixed Version"])
         for result in complete_scan_result.scan_results:
             for cve in result.cves:
                 for detail in cve.details:
-                    writer.writerow([result.image.full_name,
+                    writer.writerow([f'{result.image.repo_name}:{result.image.tag}',
                                      cve.cve_id,
                                      detail.severity,
+                                     detail.package,
                                      detail.fixed])
                     if detail.severity == 'CRITICAL' and detail.fixed:
                         critical_fixed_table.add_row([
-                            result.image.full_name,
+                            f'{result.image.repo_name}:{result.image.tag}',
                             cve.cve_id,
+                            detail.package,
                             detail.fixed,
                         ])
         message_content = []

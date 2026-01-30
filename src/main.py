@@ -102,13 +102,8 @@ def main():
 
         logger.info("Checking for image version updates")
         registry_client = RegistryClient(config)
-        update_results = []
 
-        for idx, image in enumerate(sorted(images), 1):
-            logger.debug(f"[{idx}/{len(images)}] Checking updates for: {image}")
-            update_info = registry_client.check_image_updates(image)
-            if update_info:
-                update_results.append(update_info)
+        update_results = registry_client.check_image_updates(images)
 
         if config.discord_webhook_url:
             logger.debug("Sending Discord webhook notification...")

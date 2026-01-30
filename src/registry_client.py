@@ -387,33 +387,42 @@ class RegistryClient:
             result.append(image)
         return result
 
-    def check_image_updates(self, image: Image) -> Optional[UpdateInfo]:
+    def check_image_updates(self, images: list[Image]) -> list[UpdateInfo]:
         '''
         Check for newer versions of image
 
         image: K8s Client Image object
         '''
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_image_updates'):
-            if image.tag == 'latest':
-                logger.debug(f"Skipping version check for {image} (latest tag)")
-                return None
-            if image.is_ocir_image and not image.version.is_semver and not image.created_at:
-                image.created_at = self.get_image_creation_date(image)
-            available_tags = self.get_image_versions(image)
+        update_info_list = []
+        repo_names_processed = []
+        for image in images:
+            # Make sure we dont check any dupes
+            if f'{image.registry}/{image.repo_name}' in repo_names_processed:
+                continue
+            repo_names_processed.append(f'{image.registry}/{image.repo_name}')
+            with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_image_update') as span:
+                logger.info(f'Checking for updates on image {image.full_name}')
+                span.set_attribute('image', image.full_name)
+                if image.tag == 'latest':
+                    logger.debug(f"Skipping version check for {image} (latest tag)")
+                    continue
+                if image.is_ocir_image and not image.version.is_semver and not image.created_at:
+                    image.created_at = self.get_image_creation_date(image)
+                available_tags = self.get_image_versions(image)
 
-            # Filter non server images when original is a semver
-            if image.version.is_semver:
-                available_tags = self.filter_non_semvers(available_tags)
-            if not available_tags:
-                logger.warning(f'Unable to find new tags for image {image.full_name}')
-                return None
-            newest_version = self.get_latest_version(image, available_tags)
-            if image.version != newest_version.version:
-                if image.version.is_semver and not image.version < newest_version.version:
-                    return None
-                logger.info(f'Existing image {image.full_name} has newever version available {newest_version.full_name}')
-                return UpdateInfo(image.registry, image.repo_name, image.version, newest_version.version)
-            return None
+                # Filter non server images when original is a semver
+                if image.version.is_semver:
+                    available_tags = self.filter_non_semvers(available_tags)
+                if not available_tags:
+                    logger.warning(f'Unable to find new tags for image {image.full_name}')
+                    continue
+                newest_version = self.get_latest_version(image, available_tags)
+                if image.version != newest_version.version:
+                    if image.version.is_semver and not image.version < newest_version.version:
+                        continue
+                    logger.info(f'Existing image {image.full_name} has newever version available {newest_version.full_name}')
+                    update_info_list.append(UpdateInfo(image.registry, image.repo_name, image.version, newest_version.version))
+        return update_info_list
 
     def get_old_images(self, images: list[Image], keep_count: int = 5,
                        extra_repositories: list[str] = None) -> list[CleanupRecommendation]:
