@@ -368,9 +368,9 @@ class TestRegistryClient:
         client = RegistryClient(config)
         image = Image('test.ocir.io/testnamespace/myapp:latest')
 
-        result = client.check_image_updates(image)
+        result = client.check_image_updates([image])
 
-        assert result is None
+        assert len(result) == 0
 
     @patch('src.registry_client.oci')
     def test_check_image_updates_returns_update_info(self, mock_oci, config):
@@ -395,12 +395,12 @@ class TestRegistryClient:
         client._ocir_image_cache['testnamespace/myapp'] = [old_image, new_image]
 
         image = Image('test.ocir.io/testnamespace/myapp:v1.0.0')
-        result = client.check_image_updates(image)
+        result = client.check_image_updates([image])
 
         assert result is not None
-        assert isinstance(result, UpdateInfo)
-        assert str(result.current) == '1.0.0'
-        assert str(result.latest) == '2.0.0'
+        assert isinstance(result[0], UpdateInfo)
+        assert str(result[0].current) == '1.0.0'
+        assert str(result[0].latest) == '2.0.0'
 
     @patch('src.registry_client.oci')
     def test_get_old_images_returns_cleanup_recommendations(self, mock_oci, config):
