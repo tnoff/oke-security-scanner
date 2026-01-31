@@ -1,12 +1,14 @@
 FROM python:3.14-slim
 
 # Install system dependencies
+# Update packages for security updates
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     wget \
     tar \
     curl \
     git \
+    && apt-get -y upgrade \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Trivy from GitHub releases
