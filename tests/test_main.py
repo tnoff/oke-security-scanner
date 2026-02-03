@@ -93,7 +93,7 @@ class TestMain:
         # Setup registry client
         mock_registry_instance = Mock()
         mock_registry_instance.check_image_updates.return_value = None
-        mock_registry_instance.get_old_images.return_value = []
+        mock_registry_instance.get_old_ocir_images.return_value = []
         mock_registry_client.return_value = mock_registry_instance
 
         main()
@@ -154,7 +154,7 @@ class TestMain:
         # Setup registry client
         mock_registry_instance = Mock()
         mock_registry_instance.check_image_updates.return_value = None
-        mock_registry_instance.get_old_images.return_value = []
+        mock_registry_instance.get_old_ocir_images.return_value = []
         mock_registry_client.return_value = mock_registry_instance
 
         main()

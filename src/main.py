@@ -111,7 +111,7 @@ def main():
             notifier.send_version_update_info(update_results)
         logger.info("Checking for OCIR cleanup recommendations...")
         registry_client = RegistryClient(config)
-        cleanup_recommendations = registry_client.get_old_images(
+        cleanup_recommendations = registry_client.get_old_ocir_images(
             images, keep_count=config.ocir_cleanup_keep_count,
             extra_repositories=config.ocir_extra_repositories,
         )
