@@ -1,8 +1,11 @@
 """Tests for k8s_client module."""
 
-import pytest
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
-from src.k8s_client import KubernetesClient, Image, ImageVersion
+
+import pytest
+
+from src.k8s_client import KubernetesClient, Image
 
 
 class TestKubernetesClient:
@@ -32,7 +35,7 @@ class TestKubernetesClient:
     @patch('src.k8s_client.client.AppsV1Api')
     @patch('src.k8s_client.client.CoreV1Api')
     @patch('src.k8s_client.config.load_incluster_config')
-    def test_init_loads_incluster_config(self, mock_load_config, mock_core_api, mock_apps_api, mock_tracer, config, logger_provider):
+    def test_init_loads_incluster_config(self, mock_load_config, _mock_core_api, _mock_apps_api, _mock_tracer, config, logger_provider):
         """Test that initialization loads in-cluster config."""
         KubernetesClient(config, logger_provider)
         mock_load_config.assert_called_once()
@@ -49,7 +52,7 @@ class TestKubernetesClient:
         base_config.exclude_namespaces = ["kube-system"]
 
         with patch('src.k8s_client.config.load_incluster_config'), \
-             patch('src.k8s_client.client.CoreV1Api') as mock_core_v1, \
+             patch('src.k8s_client.client.CoreV1Api'), \
              patch('src.k8s_client.client.AppsV1Api'), \
              patch('src.k8s_client.tracer'):
 
@@ -113,11 +116,20 @@ class TestImage:
         assert image.version.patch == 3
 
     def test_non_semver_version(self):
-        """Test non-semver version (commit hash)."""
+        """Test non-semver version (arbitrary tag)."""
         image = Image("registry.io/repo:abc123def")
 
         assert image.version.is_semver is False
+        assert image.version.is_githash is False
         assert image.version.tag == "abc123def"
+
+    def test_githash_version(self):
+        """Test githash version (7-character alphanumeric)."""
+        image = Image("registry.io/repo:abc1234")
+
+        assert image.version.is_semver is False
+        assert image.version.is_githash is True
+        assert image.version.tag == "abc1234"
 
 
 class TestImageVersion:
@@ -142,12 +154,21 @@ class TestImageVersion:
         assert image.version.minor == 2
         assert image.version.patch == 3
 
-    def test_non_semver_commit_hash_via_image(self):
-        """Test non-semver commit hash."""
+    def test_non_semver_arbitrary_tag_via_image(self):
+        """Test non-semver arbitrary tag."""
         image = Image("registry.io/repo:abc123def456")
 
         assert image.version.is_semver is False
+        assert image.version.is_githash is False
         assert image.version.tag == "abc123def456"
+
+    def test_githash_via_image(self):
+        """Test 7-character githash is detected correctly."""
+        image = Image("registry.io/repo:a1b2c3d")
+
+        assert image.version.is_semver is False
+        assert image.version.is_githash is True
+        assert image.version.tag == "a1b2c3d"
 
     def test_version_comparison(self):
         """Test version comparison operators."""
@@ -180,7 +201,23 @@ class TestImageVersion:
     def test_str_representation(self):
         """Test string representation of versions."""
         semver_img = Image("registry.io/repo:v1.2.3")
-        commit_img = Image("registry.io/repo:abc123")
+        commit_img = Image("registry.io/repo:abc1234")
 
         assert str(semver_img.version) == "1.2.3"
-        assert str(commit_img.version) == "abc123"
+        assert str(commit_img.version) == "abc1234"
+
+    def test_image_comparison_with_created_at(self):
+        """Test Image comparison uses created_at for non-semver images."""
+        img1 = Image("registry.io/repo:abc1234", created_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
+        img2 = Image("registry.io/repo:def5678", created_at=datetime(2024, 2, 1, tzinfo=timezone.utc))
+
+        assert img1 < img2
+        assert img2 > img1
+
+    def test_image_comparison_semver_vs_semver(self):
+        """Test Image comparison uses semver for semver images."""
+        img1 = Image("registry.io/repo:v1.0.0")
+        img2 = Image("registry.io/repo:v2.0.0")
+
+        assert img1 < img2
+        assert img2 > img1

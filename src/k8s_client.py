@@ -17,7 +17,8 @@ logger = getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 # Semver regex pattern (supports v1.2.3 or 1.2.3 format, or 3.4)
-SEMVER_PATTERN = re.compile(r'^v?(\d+)\.(\d+)\.?(\d+)?.*')
+SEMVER_PATTERN = re.compile(r'^v?(\d+)\.(\d+)\.?(\d+)?$')
+GITHASH_PATTERN = re.compile(r'^[a-zA-Z0-9]{7}$')
 
 OTEL_PREFIX = 'k8s'
 
@@ -30,6 +31,7 @@ class ImageVersion:
     minor: Optional[int] = None
     patch: Optional[int] = None
     is_semver: bool = False
+    is_githash: bool = False
 
     def __lt__(self, other: Self) -> bool:
         """Compare versions for sorting."""
@@ -76,7 +78,6 @@ class Image:
     def __parse_version(self) -> ImageVersion:
         """Parse a tag into a version object."""
         match = SEMVER_PATTERN.match(self.tag)
-
         if match:
             # Patch is an optional parameter
             patch = 0
@@ -93,8 +94,10 @@ class Image:
                 patch=patch,
                 is_semver=True,
             )
-
-        return ImageVersion(tag=self.tag, is_semver=False)
+        match = GITHASH_PATTERN.match(self.tag)
+        if match:
+            return ImageVersion(self.tag, is_githash=True)
+        return ImageVersion(tag=self.tag)
 
     def __post_init__(self):
         # Init the rest
@@ -113,6 +116,10 @@ class Image:
         return self.full_name == value.full_name
 
     def __lt__(self, value: Self) -> bool:
+        if self.version.is_semver and value.version.is_semver:
+            return self.version < value.version
+        if self.created_at and value.created_at:
+            return self.created_at < value.created_at
         return self.full_name < value.full_name
 
     def __str__(self):

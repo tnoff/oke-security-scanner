@@ -24,6 +24,7 @@ disable=
     logging-fstring-interpolation,
     broad-exception-caught,
     too-many-return-statements,
+    protected-access,
 
 [FORMAT]
 # Maximum number of characters on a single line

@@ -403,8 +403,8 @@ class TestRegistryClient:
         assert str(result[0].latest) == '2.0.0'
 
     @patch('src.registry_client.oci')
-    def test_get_old_images_returns_cleanup_recommendations(self, mock_oci, config):
-        """Test get_old_images returns CleanupRecommendation for old images."""
+    def test_get_old_ocir_images_returns_cleanup_recommendations(self, mock_oci, config):
+        """Test get_old_ocir_images returns CleanupRecommendation for old githash images."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.config.from_file.return_value = mock_config
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
@@ -419,12 +419,12 @@ class TestRegistryClient:
         client = RegistryClient(config)
         client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
 
-        # Create old commit hash images
+        # Create old githash images (7-character alphanumeric tags)
         now = datetime.now(timezone.utc)
         cached_images = []
         for i in range(10):
             img = Image(
-                f'test.ocir.io/testnamespace/myapp:commit{i}',
+                f'test.ocir.io/testnamespace/myapp:abc{i:04d}',
                 ocid=f'ocid1.image.{i}',
                 created_at=now - timedelta(days=i)
             )
@@ -433,9 +433,9 @@ class TestRegistryClient:
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
 
         # Current image in use
-        images = [Image('test.ocir.io/testnamespace/myapp:commit0')]
+        images = [Image('test.ocir.io/testnamespace/myapp:abc0000')]
 
-        recommendations = client.get_old_images(images, keep_count=5)
+        recommendations = client.get_old_ocir_images(images, keep_count=5)
 
         assert len(recommendations) == 1
         rec = recommendations[0]

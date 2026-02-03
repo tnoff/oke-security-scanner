@@ -367,15 +367,10 @@ class RegistryClient:
             return [Image(f'{image.registry}/{image.repo_name}:{tag}') for tag in tags if tag != 'latest']
 
 
-    def get_latest_version(self, current_image: Image, image_versions: list[Image]) -> Image:
+    def get_latest_version(self, image_versions: list[Image]) -> Image:
         """Get the latest version from a list of tags"""
-        # If semver image, grab from image with latest creation date
-        if not current_image.version.is_semver:
-            image_versions.sort(key=lambda image: image.created_at)
-            return image_versions[-1]
-
-        # Assume otherwise we go purely off image versions
-        image_versions.sort(key=lambda image: image.version)
+        # Assume Image class will sort correctly
+        image_versions.sort(key=lambda image: image)
         return image_versions[-1]
 
     def filter_non_semvers(self, image_list: list[Image]) -> list[Image]:
@@ -406,7 +401,7 @@ class RegistryClient:
                 if image.tag == 'latest':
                     logger.debug(f"Skipping version check for {image} (latest tag)")
                     continue
-                if image.is_ocir_image and not image.version.is_semver and not image.created_at:
+                if image.is_ocir_image and image.version.is_githash and not image.created_at:
                     image.created_at = self.get_image_creation_date(image)
                 available_tags = self.get_image_versions(image)
 
@@ -416,7 +411,7 @@ class RegistryClient:
                 if not available_tags:
                     logger.warning(f'Unable to find new tags for image {image.full_name}')
                     continue
-                newest_version = self.get_latest_version(image, available_tags)
+                newest_version = self.get_latest_version(available_tags)
                 if image.version != newest_version.version:
                     if image.version.is_semver and not image.version < newest_version.version:
                         continue
@@ -424,12 +419,12 @@ class RegistryClient:
                     update_info_list.append(UpdateInfo(image.registry, image.repo_name, image.version, newest_version.version))
         return update_info_list
 
-    def get_old_images(self, images: list[Image], keep_count: int = 5,
+    def get_old_ocir_images(self, images: list[Image], keep_count: int = 5,
                        extra_repositories: list[str] = None) -> list[CleanupRecommendation]:
         '''Return report of images that can be deleted'''
         repo_names_processed = []
         extra_repositories = extra_repositories or []
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_old_images'):
+        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_old_ocir_images'):
             recommendations = []
             for extra_repo in extra_repositories:
                 logger.info(f'Scanning extra repo {extra_repo} in old image scan')
@@ -441,9 +436,9 @@ class RegistryClient:
                 if not image.is_ocir_image:
                     continue
                 all_images = self._get_ocir_images_via_sdk(image)
-                # For this purpose we only care about non semver
+                # For this purpose we only care about githash images
                 # Also skip the currently deployed image
-                filtered_images = [im for im in all_images if not im.version.is_semver and im.tag != 'latest' and im.full_name != image.full_name]
+                filtered_images = [im for im in all_images if im.version.is_githash and im.tag != 'latest' and im.full_name != image.full_name]
                 # Then sort so we can check against the keep count
                 filtered_images.sort(key=lambda im: im.created_at)
                 if len(filtered_images) <= keep_count:
