@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from pathlib import Path
 import pytest
 from unittest.mock import Mock, patch
 from src.scanner import TrivyScanner, ScanResult, CVE, CVEDetails, CompleteScanResult
@@ -224,6 +225,125 @@ class TestTrivyScanner:
         call_args = mock_run.call_args[0][0]
         assert "--timeout" in call_args
         assert "300s" in call_args
+
+    def test_cleanup_image_cache_removes_fanal_dir(self, scanner, tmp_path):
+        """Test that _cleanup_image_cache removes the fanal directory."""
+        # Override cache_dir to use tmp_path
+        scanner.cache_dir = tmp_path
+
+        # Create the fanal directory with some files
+        fanal_dir = tmp_path / "fanal"
+        fanal_dir.mkdir()
+        (fanal_dir / "some_cache_file").write_text("cached data")
+        (fanal_dir / "subdir").mkdir()
+        (fanal_dir / "subdir" / "nested_file").write_text("nested data")
+
+        assert fanal_dir.exists()
+
+        scanner._cleanup_image_cache()
+
+        assert not fanal_dir.exists()
+
+    def test_cleanup_image_cache_preserves_db_dir(self, scanner, tmp_path):
+        """Test that _cleanup_image_cache preserves the db directory."""
+        # Override cache_dir to use tmp_path
+        scanner.cache_dir = tmp_path
+
+        # Create both db and fanal directories
+        db_dir = tmp_path / "db"
+        db_dir.mkdir()
+        (db_dir / "trivy.db").write_text("vulnerability database")
+
+        fanal_dir = tmp_path / "fanal"
+        fanal_dir.mkdir()
+        (fanal_dir / "image_layers").write_text("cached layers")
+
+        scanner._cleanup_image_cache()
+
+        # db should still exist, fanal should be removed
+        assert db_dir.exists()
+        assert (db_dir / "trivy.db").exists()
+        assert not fanal_dir.exists()
+
+    def test_cleanup_image_cache_handles_missing_fanal_dir(self, scanner, tmp_path):
+        """Test that _cleanup_image_cache handles missing fanal directory gracefully."""
+        # Override cache_dir to use tmp_path
+        scanner.cache_dir = tmp_path
+
+        # Don't create fanal directory - it shouldn't exist
+        fanal_dir = tmp_path / "fanal"
+        assert not fanal_dir.exists()
+
+        # Should not raise an exception
+        scanner._cleanup_image_cache()
+
+    @patch('src.scanner.subprocess.run')
+    def test_scan_image_calls_cleanup_on_success(self, mock_run, scanner, sample_trivy_results, tmp_path):
+        """Test that scan_image cleans up cache after successful scan."""
+        scanner.cache_dir = tmp_path
+        fanal_dir = tmp_path / "fanal"
+        fanal_dir.mkdir()
+        (fanal_dir / "cached_layer").write_text("layer data")
+
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(sample_trivy_results)
+        mock_run.return_value = mock_result
+
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner.scan_image(image)
+
+        assert result is not None
+        assert not fanal_dir.exists()
+
+    @patch('src.scanner.subprocess.run')
+    def test_scan_image_calls_cleanup_on_timeout(self, mock_run, scanner, tmp_path):
+        """Test that scan_image cleans up cache even after timeout."""
+        scanner.cache_dir = tmp_path
+        fanal_dir = tmp_path / "fanal"
+        fanal_dir.mkdir()
+        (fanal_dir / "cached_layer").write_text("layer data")
+
+        mock_run.side_effect = subprocess.TimeoutExpired("trivy", 300)
+
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner.scan_image(image)
+
+        assert result is None
+        assert not fanal_dir.exists()
+
+    @patch('src.scanner.subprocess.run')
+    def test_scan_image_calls_cleanup_on_process_error(self, mock_run, scanner, tmp_path):
+        """Test that scan_image cleans up cache even after process error."""
+        scanner.cache_dir = tmp_path
+        fanal_dir = tmp_path / "fanal"
+        fanal_dir.mkdir()
+        (fanal_dir / "cached_layer").write_text("layer data")
+
+        mock_run.side_effect = subprocess.CalledProcessError(1, "trivy", stderr="Scan failed")
+
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner.scan_image(image)
+
+        assert result is None
+        assert not fanal_dir.exists()
+
+    @patch('src.scanner.subprocess.run')
+    def test_scan_image_calls_cleanup_on_json_error(self, mock_run, scanner, tmp_path):
+        """Test that scan_image cleans up cache even after JSON decode error."""
+        scanner.cache_dir = tmp_path
+        fanal_dir = tmp_path / "fanal"
+        fanal_dir.mkdir()
+        (fanal_dir / "cached_layer").write_text("layer data")
+
+        mock_result = Mock()
+        mock_result.stdout = "not valid json"
+        mock_run.return_value = mock_result
+
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = scanner.scan_image(image)
+
+        assert result is None
+        assert not fanal_dir.exists()
 
 
 class TestCompleteScanResult:
