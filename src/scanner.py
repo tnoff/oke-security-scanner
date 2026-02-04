@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from logging import getLogger
 from json import JSONDecodeError
 from json import loads as json_loads
+from pathlib import Path
+import shutil
 import subprocess
 from typing import Optional
 
@@ -102,8 +104,16 @@ class TrivyScanner:
         """Initialize Trivy scanner."""
         self.cfg = cfg
         self.db_updated = False
+        self.cache_dir = Path.home() / ".cache" / "trivy"
         if logger_provider:
             logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
+
+    def _cleanup_image_cache(self) -> None:
+        """Remove cached image layers while preserving the vulnerability database."""
+        fanal_dir = self.cache_dir / "fanal"
+        if fanal_dir.exists():
+            shutil.rmtree(fanal_dir, ignore_errors=True)
+            logger.debug("Cleaned up Trivy image cache")
 
     def update_database(self) -> bool:
         """Update Trivy vulnerability database."""
@@ -168,6 +178,9 @@ class TrivyScanner:
                 logger.error(f"Failed to parse Trivy output for {image.full_name}: {e}")
                 span.record_exception(e)
                 return None
+
+            finally:
+                self._cleanup_image_cache()
 
     def _parse_vulnerabilities(self, image: Image, json_output: dict) -> Optional[ScanResult]:
         """Parse vulnerability counts and CVE details from Trivy results.

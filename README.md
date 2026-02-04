@@ -9,6 +9,7 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 | Security Scanner | No | Fetches all images in K8s cluster and runs trivy scanner |
 | Image Update Report | No | Checks for new versions of deployed images |
 | Image Cleanup | Yes | Cleanup OCIR images that do not match semver versioning |
+| Cache Management | No | Automatic cleanup of Trivy image cache after each scan to minimize disk usage |
 
 ## Install and Usage
 
@@ -49,6 +50,21 @@ key_file=~/.oci/oci_api_key.pem
 
 ### Trivy
 Trivy will use Docker credentials from `~/.docker/config.json` to pull images for scanning.
+
+## Cache Management
+
+The scanner automatically manages Trivy's cache to minimize disk usage, which is important when running in Kubernetes with ephemeral storage.
+
+After each image scan, the scanner removes the `fanal/` directory (cached image layers) while preserving:
+- `db/` - Vulnerability database (~50MB, updated once per run)
+- `java-db/` - Java vulnerability index
+
+This approach:
+- Prevents disk exhaustion when scanning many large images
+- Avoids re-downloading the vulnerability database for each scan
+- Ensures cleanup happens even if scans fail or timeout
+
+The Trivy cache is located at `~/.cache/trivy/` (or `$TRIVY_CACHE_DIR` if set).
 
 ## Configuration
 
