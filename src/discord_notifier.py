@@ -14,6 +14,7 @@ import requests
 from .k8s_client import Image
 from .scanner import CompleteScanResult
 from .registry_client import UpdateInfo, CleanupRecommendation
+from .oke_client import NodeImageUpdateInfo
 
 logger = getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -149,6 +150,36 @@ class DiscordNotifier:
             content = ['## No images deleted\n']
         else:
             content = full_report_table.print()
+        self._send_message(content)
+
+    def send_node_image_report(self, updates: list[NodeImageUpdateInfo]):
+        """Send node image update report to Discord.
+
+        Args:
+            updates: List of NodeImageUpdateInfo with available updates
+        """
+        full_report_table = DapperTable(header_options=DapperTableHeaderOptions([
+            DapperTableHeader('Node Pool', 24),
+            DapperTableHeader('Current Image Date', 16),
+            DapperTableHeader('Latest Image Date', 16),
+        ]), pagination_options=PaginationLength(self.max_length), enclosure_start='```', enclosure_end='```',
+        prefix='## OKE Node Image Updates Available\n')
+
+        for update in updates:
+            current_date = update.current_image_date.strftime('%Y.%m.%d') if update.current_image_date else 'Unknown'
+            latest_date = update.latest_image_date.strftime('%Y.%m.%d') if update.latest_image_date else 'Unknown'
+            full_report_table.add_row([
+                update.node_pool_name,
+                current_date,
+                latest_date,
+            ])
+
+        content = []
+        if not full_report_table.size:
+            content = ['## OKE Node Images Up To Date\n']
+        else:
+            content = full_report_table.print()
+            content.append('\n*Cycle node pools to apply updates: OCI Console > OKE > Node Pools > Edit*')
         self._send_message(content)
 
     def _send_file(self, message_content: str, file_contents: str, file_name: str):

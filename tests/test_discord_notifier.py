@@ -161,3 +161,65 @@ class TestDiscordNotifier:
 
         # Should still send a "no images deleted" message
         assert mock_post.call_count >= 1
+
+    @patch('src.discord_notifier.requests.post')
+    def test_send_node_image_report(self, mock_post, notifier, mock_dapper_table):
+        """Test sending node image update report."""
+        from src.oke_client import NodeImageUpdateInfo
+
+        mock_post.return_value = Mock(status_code=200)
+        mock_post.return_value.raise_for_status = Mock()
+
+        updates = [
+            NodeImageUpdateInfo(
+                node_pool_name="pool-1",
+                kubernetes_version="v1.28.2",
+                current_image_name="Oracle-Linux-8.10-aarch64-2025.11.20-0",
+                current_image_date=datetime(2025, 11, 20),
+                latest_image_name="Oracle-Linux-8.10-aarch64-2025.12.15-0",
+                latest_image_date=datetime(2025, 12, 15),
+                latest_image_id="ocid1.image.oc1.test",
+            )
+        ]
+
+        notifier.send_node_image_report(updates)
+
+        assert mock_post.call_count >= 1
+
+    @patch('src.discord_notifier.requests.post')
+    def test_send_node_image_report_empty(self, mock_post, notifier, mock_dapper_table):
+        """Test sending empty node image report."""
+        mock_post.return_value = Mock(status_code=200)
+        mock_post.return_value.raise_for_status = Mock()
+
+        # Set size to 0 to simulate empty table
+        mock_dapper_table.return_value.size = 0
+
+        notifier.send_node_image_report([])
+
+        # Should still send an "up to date" message
+        assert mock_post.call_count >= 1
+
+    @patch('src.discord_notifier.requests.post')
+    def test_send_node_image_report_with_none_dates(self, mock_post, notifier, mock_dapper_table):
+        """Test sending node image report when dates are None."""
+        from src.oke_client import NodeImageUpdateInfo
+
+        mock_post.return_value = Mock(status_code=200)
+        mock_post.return_value.raise_for_status = Mock()
+
+        updates = [
+            NodeImageUpdateInfo(
+                node_pool_name="pool-1",
+                kubernetes_version="v1.28.2",
+                current_image_name="Unknown",
+                current_image_date=None,
+                latest_image_name="Unknown",
+                latest_image_date=None,
+                latest_image_id="ocid1.image.oc1.test",
+            )
+        ]
+
+        notifier.send_node_image_report(updates)
+
+        assert mock_post.call_count >= 1

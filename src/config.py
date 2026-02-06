@@ -31,6 +31,10 @@ class Config:
     ocir_cleanup_keep_count: int
     ocir_extra_repositories: list[str]
 
+    # OKE node image check configuration
+    oke_image_check_enabled: bool
+    oke_cluster_ocid: str
+
     @classmethod
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
@@ -58,4 +62,8 @@ class Config:
             ocir_cleanup_keep_count=int(os.getenv("OCIR_CLEANUP_KEEP_COUNT", "5")),
             # Comma separated list of extra repos
             ocir_extra_repositories=os.getenv('OCIR_EXTRA_REPOSITORIES', "").split(','),
+
+            # OKE node image check configuration
+            oke_image_check_enabled=os.getenv("OKE_IMAGE_CHECK_ENABLED", "false").lower() == "true",
+            oke_cluster_ocid=os.getenv("OKE_CLUSTER_OCID", ""),
         )

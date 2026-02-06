@@ -22,6 +22,8 @@ class TestConfig:
         monkeypatch.setenv("OCIR_CLEANUP_ENABLED", "true")
         monkeypatch.setenv("OCIR_CLEANUP_KEEP_COUNT", "10")
         monkeypatch.setenv("OCIR_EXTRA_REPOSITORIES", "repo1,repo2")
+        monkeypatch.setenv("OKE_IMAGE_CHECK_ENABLED", "true")
+        monkeypatch.setenv("OKE_CLUSTER_OCID", "ocid1.cluster.oc1.test")
 
         config = Config.from_env()
 
@@ -38,6 +40,8 @@ class TestConfig:
         assert config.ocir_cleanup_enabled is True
         assert config.ocir_cleanup_keep_count == 10
         assert config.ocir_extra_repositories == ["repo1", "repo2"]
+        assert config.oke_image_check_enabled is True
+        assert config.oke_cluster_ocid == "ocid1.cluster.oc1.test"
 
     def test_from_env_with_defaults(self):
         """Test Config.from_env with default values."""
@@ -56,6 +60,8 @@ class TestConfig:
         assert config.discord_webhook_url == ""
         assert config.ocir_cleanup_enabled is False
         assert config.ocir_cleanup_keep_count == 5
+        assert config.oke_image_check_enabled is False
+        assert config.oke_cluster_ocid == ""
 
     def test_from_env_otlp_insecure_false(self, monkeypatch):
         """Test OTLP_INSECURE=false."""
@@ -103,3 +109,27 @@ class TestConfig:
 
         config = Config.from_env()
         assert config.ocir_cleanup_keep_count == 10
+
+    def test_oke_image_check_enabled(self, monkeypatch):
+        """Test OKE_IMAGE_CHECK_ENABLED=true."""
+        monkeypatch.setenv("OKE_IMAGE_CHECK_ENABLED", "true")
+
+        config = Config.from_env()
+        assert config.oke_image_check_enabled is True
+
+    def test_oke_image_check_disabled_by_default(self):
+        """Test OKE_IMAGE_CHECK_ENABLED defaults to false."""
+        config = Config.from_env()
+        assert config.oke_image_check_enabled is False
+
+    def test_oke_cluster_ocid(self, monkeypatch):
+        """Test OKE_CLUSTER_OCID setting."""
+        monkeypatch.setenv("OKE_CLUSTER_OCID", "ocid1.cluster.oc1.test")
+
+        config = Config.from_env()
+        assert config.oke_cluster_ocid == "ocid1.cluster.oc1.test"
+
+    def test_oke_cluster_ocid_empty_by_default(self):
+        """Test OKE_CLUSTER_OCID defaults to empty string."""
+        config = Config.from_env()
+        assert config.oke_cluster_ocid == ""

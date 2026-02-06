@@ -14,6 +14,7 @@ from .k8s_client import KubernetesClient
 from .scanner import TrivyScanner, CompleteScanResult
 from .discord_notifier import DiscordNotifier
 from .registry_client import RegistryClient
+from .oke_client import OKEClient
 
 
 logger = getLogger(__name__)
@@ -125,6 +126,23 @@ def main():
                 logger.debug("Sending Discord webhook notification...")
                 notifier = DiscordNotifier(config.discord_webhook_url)
                 notifier.send_deletion_results(deletion_results)
+
+        # Check for OKE node image updates (if enabled)
+        if config.oke_image_check_enabled:
+            logger.info("Checking for OKE node image updates...")
+            oke_client = OKEClient(config)
+            node_image_updates = oke_client.check_for_updates()
+
+            if node_image_updates:
+                logger.info(f"Found {len(node_image_updates)} node pool(s) with updates available")
+            else:
+                logger.info("All node pools are up to date")
+
+            if config.discord_webhook_url:
+                logger.debug("Sending Discord webhook notification...")
+                notifier = DiscordNotifier(config.discord_webhook_url)
+                notifier.send_node_image_report(node_image_updates)
+
         logger.info("Scan completed successfully")
 
     finally:
