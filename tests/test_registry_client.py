@@ -404,7 +404,7 @@ class TestRegistryClient:
 
     @patch('src.registry_client.oci')
     def test_get_old_ocir_images_returns_cleanup_recommendations(self, mock_oci, config):
-        """Test get_old_ocir_images returns CleanupRecommendation for old githash images."""
+        """Test get_old_ocir_images returns CleanupRecommendation for old images."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.config.from_file.return_value = mock_config
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
@@ -443,6 +443,90 @@ class TestRegistryClient:
         assert rec.repository == 'testnamespace/myapp'
         # Should have 4 images to delete (10 - 1 current - 5 keep = 4)
         assert len(rec.tags_to_delete) == 4
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_includes_all_tag_types(self, mock_oci, config):
+        """Test get_old_ocir_images includes semver, githash, and arbitrary tags in cleanup."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image('test.ocir.io/testnamespace/myapp:abc1234', ocid='ocid1.image.1', created_at=now - timedelta(days=10)),
+            Image('test.ocir.io/testnamespace/myapp:v1.0.0', ocid='ocid1.image.2', created_at=now - timedelta(days=9)),
+            Image('test.ocir.io/testnamespace/myapp:my-custom-tag', ocid='ocid1.image.3', created_at=now - timedelta(days=8)),
+            Image('test.ocir.io/testnamespace/myapp:dev-build-42', ocid='ocid1.image.4', created_at=now - timedelta(days=7)),
+            Image('test.ocir.io/testnamespace/myapp:deployed', ocid='ocid1.image.5', created_at=now - timedelta(days=1)),
+        ]
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        # 'deployed' is the currently running image
+        images = [Image('test.ocir.io/testnamespace/myapp:deployed')]
+
+        recommendations = client.get_old_ocir_images(images, keep_count=1)
+
+        assert len(recommendations) == 1
+        rec = recommendations[0]
+        deleted_tags = {img.tag for img in rec.tags_to_delete}
+        # 5 total - 1 deployed - 1 keep = 3 to delete (the 3 oldest)
+        assert len(rec.tags_to_delete) == 3
+        assert 'abc1234' in deleted_tags
+        assert 'v1.0.0' in deleted_tags
+        assert 'my-custom-tag' in deleted_tags
+        # The kept image (newest non-deployed) and deployed should not be deleted
+        assert 'dev-build-42' not in deleted_tags
+        assert 'deployed' not in deleted_tags
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_excludes_latest_and_deployed(self, mock_oci, config):
+        """Test get_old_ocir_images always excludes 'latest' tag and currently deployed image."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.0', created_at=now),
+            Image('test.ocir.io/testnamespace/myapp:abc1234', ocid='ocid1.image.1', created_at=now - timedelta(days=10)),
+            Image('test.ocir.io/testnamespace/myapp:old-tag', ocid='ocid1.image.2', created_at=now - timedelta(days=9)),
+            Image('test.ocir.io/testnamespace/myapp:deployed', ocid='ocid1.image.3', created_at=now - timedelta(days=1)),
+        ]
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        images = [Image('test.ocir.io/testnamespace/myapp:deployed')]
+
+        recommendations = client.get_old_ocir_images(images, keep_count=0)
+
+        assert len(recommendations) == 1
+        rec = recommendations[0]
+        deleted_tags = {img.tag for img in rec.tags_to_delete}
+        # 'latest' and 'deployed' must never be deleted
+        assert 'latest' not in deleted_tags
+        assert 'deployed' not in deleted_tags
+        # The remaining images should be marked for deletion
+        assert 'abc1234' in deleted_tags
+        assert 'old-tag' in deleted_tags
 
     @patch('src.registry_client.oci')
     def test_delete_ocir_images(self, mock_oci, config):
