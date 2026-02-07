@@ -22,6 +22,8 @@ def base_config():
         ocir_cleanup_enabled=False,
         ocir_cleanup_keep_count=5,
         ocir_extra_repositories=[],
+        oke_image_check_enabled=False,
+        oke_cluster_ocid="",
     )
 
 
