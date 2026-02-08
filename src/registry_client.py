@@ -466,6 +466,12 @@ class RegistryClient:
 
             for item in cleanup_recommendations:
                 for image in item.tags_to_delete:
-                    self.artifacts_client.delete_container_image(image.ocid)
+                    try:
+                        self.artifacts_client.delete_container_image(image.ocid)
+                    except oci.exceptions.ServiceError as e:
+                        if e.status == 404:
+                            logger.debug(f'Image {image.ocid} already deleted, skipping')
+                        else:
+                            raise
                     images_deleted.append(image)
             return images_deleted

@@ -560,6 +560,43 @@ class TestRegistryClient:
         mock_artifacts_client.delete_container_image.assert_any_call('ocid1.image.2')
 
     @patch('src.registry_client.oci')
+    def test_delete_ocir_images_skips_already_deleted(self, mock_oci, config):
+        """Test delete_ocir_images handles 404 for already-deleted images."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+
+        mock_artifacts_client = Mock()
+        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts_client
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        # Second delete raises 404 (same underlying image already deleted)
+        not_found_error = mock_oci.exceptions.ServiceError(
+            status=404, code='REPO_ID_UNKNOWN', headers={}, message='Image Id Unknown'
+        )
+        mock_artifacts_client.delete_container_image.side_effect = [
+            None,  # first delete succeeds
+            not_found_error,  # second delete 404s
+        ]
+
+        client = RegistryClient(config)
+
+        img1 = Image('test.ocir.io/testnamespace/myapp:old1', ocid='ocid1.image.1')
+        img2 = Image('test.ocir.io/testnamespace/myapp:old2', ocid='ocid1.image.1')  # same OCID
+        recommendations = [
+            CleanupRecommendation(
+                registry='test.ocir.io',
+                repository='testnamespace/myapp',
+                tags_to_delete=[img1, img2]
+            )
+        ]
+
+        deleted = client.delete_ocir_images(recommendations)
+
+        assert len(deleted) == 2
+        assert mock_artifacts_client.delete_container_image.call_count == 2
+
+    @patch('src.registry_client.oci')
     def test_delete_ocir_images_no_client(self, mock_oci, config):
         """Test delete_ocir_images returns empty when no SDK client."""
         mock_oci.config.from_file.side_effect = Exception("No config")
