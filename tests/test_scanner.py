@@ -371,12 +371,15 @@ class TestCompleteScanResult:
     def test_add_result_none(self):
         """Test adding a None result (failed scan)."""
         complete = CompleteScanResult()
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
 
-        complete.add_result(None)
+        complete.add_result(None, image)
 
         assert complete.failed_scans == 1
         assert complete.total_critical == 0
         assert len(complete.scan_results) == 0
+        assert len(complete.failed_images) == 1
+        assert complete.failed_images[0] == image
 
     def test_multiple_results(self):
         """Test adding multiple scan results."""
@@ -392,11 +395,15 @@ class TestCompleteScanResult:
         result2.critical_count = 1
         result2.high_count = 2
 
+        image3 = Image("test.ocir.io/namespace/app3:v1.0.0")
+
         complete.add_result(result1)
         complete.add_result(result2)
-        complete.add_result(None)  # Failed scan
+        complete.add_result(None, image3)  # Failed scan
 
         assert complete.total_critical == 3
         assert complete.total_high == 3
         assert complete.failed_scans == 1
         assert len(complete.scan_results) == 2
+        assert len(complete.failed_images) == 1
+        assert complete.failed_images[0] == image3
