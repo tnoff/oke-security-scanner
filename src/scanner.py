@@ -74,6 +74,7 @@ class CompleteScanResult():
     total_high: int = field(init=False)
     total_high_fixed: int = field(init=False)
     failed_scans: int = field(init=False)
+    failed_images: list[Image] = field(default_factory=list)
     scan_results: list[ScanResult] = field(default_factory=list)
 
     def __post_init__(self):
@@ -83,9 +84,11 @@ class CompleteScanResult():
         self.total_high_fixed = 0
         self.failed_scans = 0
 
-    def add_result(self, result: Optional[ScanResult]) -> bool:
+    def add_result(self, result: Optional[ScanResult], image: Optional[Image] = None) -> bool:
         if not result:
             self.failed_scans += 1
+            if image:
+                self.failed_images.append(image)
             return True
         self.total_critical += result.critical_count
         self.total_critical_fixed += result.critical_fixed_count

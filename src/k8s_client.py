@@ -102,7 +102,8 @@ class Image:
     def __post_init__(self):
         # Init the rest
         parsed = self.full_name.split(':')
-        self.tag = parsed[1]
+        # Strip digest (@sha256:...) from the tag if present
+        self.tag = parsed[1].split('@')[0]
         self.repo_name = parsed[0]
         if self.full_name.count('/') < 2:
             self.registry = "docker.io"

@@ -75,9 +75,22 @@ class DiscordNotifier:
                             detail.package,
                             detail.fixed,
                         ])
+        failed_table = DapperTable(header_options=DapperTableHeaderOptions([
+            DapperTableHeader('Image', 64),
+        ]), pagination_options=PaginationLength(self.max_length), enclosure_start='```', enclosure_end='```',
+        prefix='### Failed Scans\n')
+
+        for image in complete_scan_result.failed_images:
+            repo_name = f'{image.registry}/{image.repo_name}'
+            if image.registry == 'docker.io':
+                repo_name = image.repo_name
+            failed_table.add_row([f'{repo_name}:{image.tag}'])
+
         message_content = []
         message_content += full_report_table.print()
 
+        if failed_table.size:
+            message_content += failed_table.print()
         if critical_fixed_table.size:
             message_content += critical_fixed_table.print()
         self._send_message(message_content)

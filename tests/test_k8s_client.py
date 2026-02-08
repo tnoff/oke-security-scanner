@@ -98,6 +98,18 @@ class TestImage:
         assert image.repo_name == "library/nginx"
         assert image.tag == "latest"
 
+    def test_parse_image_strips_digest(self):
+        """Test parsing image with digest (@sha256:...) strips it from tag."""
+        image = Image("registry.k8s.io/ingress-nginx/controller:v1.14.3@sha256:abc123def456")
+
+        assert image.registry == "registry.k8s.io"
+        assert image.repo_name == "ingress-nginx/controller"
+        assert image.tag == "v1.14.3"
+        assert image.version.is_semver is True
+        assert image.version.major == 1
+        assert image.version.minor == 14
+        assert image.version.patch == 3
+
     def test_is_ocir_image(self):
         """Test is_ocir_image property."""
         ocir_image = Image("iad.ocir.io/namespace/repo:v1.0.0")

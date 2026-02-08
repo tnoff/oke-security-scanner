@@ -89,7 +89,7 @@ def main():
         for idx, image in enumerate(sorted(images), 1):
             logger.info(f"[{idx}/{len(images)}] Scanning: {image.full_name}")
             result = scanner.scan_image(image)
-            scan_results.add_result(result)
+            scan_results.add_result(result, image)
 
         if config.discord_webhook_url:
             logger.debug("Sending Discord webhook notification...")

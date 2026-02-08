@@ -436,9 +436,8 @@ class RegistryClient:
                 if not image.is_ocir_image:
                     continue
                 all_images = self._get_ocir_images_via_sdk(image)
-                # For this purpose we only care about githash images
-                # Also skip the currently deployed image
-                filtered_images = [im for im in all_images if im.version.is_githash and im.tag != 'latest' and im.full_name != image.full_name]
+                # Skip the 'latest' tag and the currently deployed image
+                filtered_images = [im for im in all_images if im.tag != 'latest' and im.full_name != image.full_name]
                 # Then sort so we can check against the keep count
                 filtered_images.sort(key=lambda im: im.created_at)
                 if len(filtered_images) <= keep_count:
@@ -467,6 +466,12 @@ class RegistryClient:
 
             for item in cleanup_recommendations:
                 for image in item.tags_to_delete:
-                    self.artifacts_client.delete_container_image(image.ocid)
+                    try:
+                        self.artifacts_client.delete_container_image(image.ocid)
+                    except oci.exceptions.ServiceError as e:
+                        if e.status == 404:
+                            logger.debug(f'Image {image.ocid} already deleted, skipping')
+                        else:
+                            raise
                     images_deleted.append(image)
             return images_deleted
