@@ -94,6 +94,7 @@ class TestMain:
         mock_registry_instance = Mock()
         mock_registry_instance.check_image_updates.return_value = None
         mock_registry_instance.get_old_ocir_images.return_value = []
+        mock_registry_instance.get_orphaned_manifests.return_value = []
         mock_registry_client.return_value = mock_registry_instance
 
         main()
@@ -155,6 +156,7 @@ class TestMain:
         mock_registry_instance = Mock()
         mock_registry_instance.check_image_updates.return_value = None
         mock_registry_instance.get_old_ocir_images.return_value = []
+        mock_registry_instance.get_orphaned_manifests.return_value = []
         mock_registry_client.return_value = mock_registry_instance
 
         main()
