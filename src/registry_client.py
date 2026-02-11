@@ -285,20 +285,26 @@ class RegistryClient:
             if not compartment_id:
                 logger.warning(f"Could not find compartment for repository {image.repo_name}")
                 return []
-            # List all container images in the repository
-            response = self.artifacts_client.list_container_images(
-                compartment_id=compartment_id,
+            # List all container images in the repository (with pagination)
+            response = oci.pagination.list_call_get_all_results(
+                self.artifacts_client.list_container_images,
+                compartment_id,
                 repository_name=repository,
             )
 
             images = []
-            for item in response.data.items:
-                # Each item has version (tag) and time_created
-                if item.version and item.version != 'latest':
-                    new_image = Image(f'{image.registry}/{image.repo_name}:{item.version}',
-                                    ocid=item.id,
-                                    created_at=item.time_created)
-                    images.append(new_image)
+            for item in response.data:
+                # Tagged images have a version; untagged platform manifests don't
+                if item.version:
+                    tag = item.version
+                elif hasattr(item, 'digest') and item.digest:
+                    tag = f'unknown@{item.digest}'
+                else:
+                    continue
+                new_image = Image(f'{image.registry}/{image.repo_name}:{tag}',
+                                ocid=item.id,
+                                created_at=item.time_created)
+                images.append(new_image)
 
             # Cache the results
             self._ocir_image_cache[image.repo_name] = images
@@ -340,8 +346,9 @@ class RegistryClient:
         with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_image_versions'):
             # Build URL and headers based on registry type
             if image.is_ocir_image:
-                # Use OCI SDK for OCIR
-                images = self._get_ocir_images_via_sdk(image)
+                # Use OCI SDK for OCIR, excluding 'latest' and platform manifests
+                images = [im for im in self._get_ocir_images_via_sdk(image)
+                          if im.tag != 'latest' and 'unknown@' not in im.full_name]
                 if images:
                     return images
                 logger.warning(f"No images found for OCIR repository: {image.repo_name}")
@@ -444,6 +451,63 @@ class RegistryClient:
                     continue
                 filtered_images = filtered_images[0:len(filtered_images) - keep_count]
                 recommendations.append(CleanupRecommendation(image.registry, image.repo_name, filtered_images))
+                repo_names_processed.append(f'{image.registry}/{image.repo_name}')
+
+            return recommendations
+
+    def get_orphaned_manifests(self, images: list[Image],
+                               extra_repositories: list[str] = None) -> list[CleanupRecommendation]:
+        """Detect orphaned platform manifests in OCIR repositories.
+
+        Multi-arch Docker builds create unknown@sha256:... platform manifests for each
+        tagged image. When the parent tag is deleted, these platform manifests remain as
+        orphans. This method identifies them by comparing created_at timestamps: platform
+        manifests whose timestamp doesn't match any normal tag's timestamp are orphans.
+
+        Args:
+            images: Set of currently deployed images
+            extra_repositories: Additional repositories to scan
+
+        Returns:
+            List of CleanupRecommendation for orphaned manifests
+        """
+        repo_names_processed = []
+        extra_repositories = extra_repositories or []
+        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_orphaned_manifests'):
+            recommendations = []
+            for extra_repo in extra_repositories:
+                logger.info(f'Scanning extra repo {extra_repo} for orphaned manifests')
+                images.add(Image(f'{self.oci_registry}/{extra_repo}:latest'))
+            for image in images:
+                if f'{image.registry}/{image.repo_name}' in repo_names_processed:
+                    continue
+                if not image.is_ocir_image:
+                    continue
+                logger.info(f'Scanning {image.repo_name} for orphaned platform manifests')
+                all_images = self._get_ocir_images_via_sdk(image)
+
+                # Separate normal tags from platform manifests
+                # Note: Image.__post_init__ strips @sha256: from the tag, so check full_name
+                normal_tags = [im for im in all_images if 'unknown@sha256:' not in im.full_name]
+                platform_manifests = [im for im in all_images if 'unknown@sha256:' in im.full_name]
+
+                if not platform_manifests:
+                    repo_names_processed.append(f'{image.registry}/{image.repo_name}')
+                    continue
+
+                # Collect timestamps from all normal tagged images
+                normal_timestamps = {im.created_at for im in normal_tags if im.created_at}
+
+                # Orphans are platform manifests whose timestamp doesn't match any normal tag
+                orphans = [im for im in platform_manifests
+                           if im.created_at not in normal_timestamps]
+
+                if orphans:
+                    logger.info(f'Found {len(orphans)} orphaned manifests in {image.repo_name} '
+                                f'(out of {len(platform_manifests)} platform manifests)')
+                    recommendations.append(CleanupRecommendation(
+                        image.registry, image.repo_name, orphans))
+
                 repo_names_processed.append(f'{image.registry}/{image.repo_name}')
 
             return recommendations

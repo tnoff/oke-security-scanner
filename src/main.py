@@ -127,6 +127,24 @@ def main():
                 notifier = DiscordNotifier(config.discord_webhook_url)
                 notifier.send_deletion_results(deletion_results)
 
+        # Orphan manifest cleanup
+        logger.info("Checking for orphaned platform manifests...")
+        orphan_recommendations = registry_client.get_orphaned_manifests(
+            images,
+            extra_repositories=config.ocir_extra_repositories,
+        )
+        for rec in orphan_recommendations:
+            logger.info(f"Found {len(rec.tags_to_delete)} orphaned manifests in {rec.repository}")
+
+        if config.ocir_cleanup_enabled:
+            orphans_deleted = registry_client.delete_ocir_images(orphan_recommendations)
+            if orphans_deleted:
+                logger.info(f"Deleted {len(orphans_deleted)} orphaned platform manifests")
+            if config.discord_webhook_url:
+                logger.debug("Sending Discord webhook notification...")
+                notifier = DiscordNotifier(config.discord_webhook_url)
+                notifier.send_deletion_results(orphans_deleted)
+
         # Check for OKE node image updates (if enabled)
         if config.oke_image_check_enabled:
             logger.info("Checking for OKE node image updates...")
