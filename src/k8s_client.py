@@ -70,6 +70,7 @@ class Image:
     # Ocid if ocir image
     ocid: str = None
     created_at: datetime = None
+    digest: str = None
     repo_name: str = field(init=False)
     tag: str = field(init=False)
     registry: str = field(init=False)
