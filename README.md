@@ -48,8 +48,11 @@ region=us-ashburn-1
 key_file=~/.oci/oci_api_key.pem
 ```
 
-### Trivy
-Trivy will use Docker credentials from `~/.docker/config.json` to pull images for scanning.
+### Docker Registry (`~/.docker/config.json`)
+
+Docker credentials from `~/.docker/config.json` are used in two places:
+- **Trivy** uses them to pull images for vulnerability scanning.
+- **Image Cleanup** uses them to fetch manifests via the Docker V2 API. When a kept image is a manifest list (multi-arch), the scanner reads its sub-manifests and protects them from deletion, preventing "manifest unknown" pull errors in the cluster.
 
 ## Cache Management
 

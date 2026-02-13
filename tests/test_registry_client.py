@@ -1,7 +1,9 @@
 """Tests for registry_client module."""
 
+import json
 import pytest
-from unittest.mock import Mock, patch
+import requests
+from unittest.mock import Mock, patch, mock_open
 from datetime import datetime, timezone, timedelta
 from src.registry_client import RegistryClient, UpdateInfo, CleanupRecommendation
 from src.k8s_client import Image
@@ -307,11 +309,13 @@ class TestRegistryClient:
         mock_image1.version = 'v1.0.0'
         mock_image1.time_created = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_image1.id = 'ocid1.image.1'
+        mock_image1.digest = 'sha256:aaa111'
 
         mock_image2 = Mock()
         mock_image2.version = 'v1.1.0'
         mock_image2.time_created = datetime(2024, 2, 1, tzinfo=timezone.utc)
         mock_image2.id = 'ocid1.image.2'
+        mock_image2.digest = 'sha256:bbb222'
 
         mock_image3 = Mock()
         mock_image3.version = None
@@ -331,6 +335,8 @@ class TestRegistryClient:
         assert images[1].tag == 'v1.1.0'
         # Untagged platform manifest uses digest as synthetic tag
         assert 'sha256:abc123def456' in images[2].full_name
+        assert images[0].digest == 'sha256:aaa111'
+        assert images[1].digest == 'sha256:bbb222'
 
     @patch('src.registry_client.oci')
     def test_get_ocir_images_via_sdk_cached(self, mock_oci, config):
@@ -803,3 +809,230 @@ class TestRegistryClient:
         result = client.delete_ocir_images(recommendations)
 
         assert result == {}
+
+    @patch('builtins.open', new_callable=mock_open,
+           read_data=json.dumps({'auths': {'iad.ocir.io': {'auth': 'dXNlcjpwYXNz'}}}))
+    @patch('src.registry_client.oci')
+    def test_get_docker_auth_found(self, mock_oci, mock_file, config):
+        """Test _get_docker_auth returns auth header when credentials exist."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+        result = client._get_docker_auth('iad.ocir.io')
+
+        assert result == {'Authorization': 'Basic dXNlcjpwYXNz'}
+
+    @patch('builtins.open', side_effect=FileNotFoundError)
+    @patch('src.registry_client.oci')
+    def test_get_docker_auth_missing_config(self, mock_oci, mock_file, config):
+        """Test _get_docker_auth returns None when config file is missing."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+        result = client._get_docker_auth('iad.ocir.io')
+
+        assert result is None
+
+    @patch('builtins.open', new_callable=mock_open,
+           read_data=json.dumps({'auths': {'other.registry.io': {'auth': 'dXNlcjpwYXNz'}}}))
+    @patch('src.registry_client.oci')
+    def test_get_docker_auth_no_entry_for_registry(self, mock_oci, mock_file, config):
+        """Test _get_docker_auth returns None when no entry for the registry."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+        result = client._get_docker_auth('iad.ocir.io')
+
+        assert result is None
+
+    @patch('src.registry_client.requests.get')
+    @patch('src.registry_client.oci')
+    def test_get_manifest_list_sub_digests_manifest_list(self, mock_oci, mock_get, config):
+        """Test _get_manifest_list_sub_digests returns sub-digests for manifest lists."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+
+        manifest_list_response = {
+            'mediaType': 'application/vnd.docker.distribution.manifest.list.v2+json',
+            'manifests': [
+                {'digest': 'sha256:sub1', 'platform': {'architecture': 'amd64'}},
+                {'digest': 'sha256:sub2', 'platform': {'architecture': 'arm64'}},
+            ]
+        }
+        mock_resp = Mock()
+        mock_resp.json.return_value = manifest_list_response
+        mock_resp.raise_for_status = Mock()
+        mock_get.return_value = mock_resp
+
+        image = Image('test.ocir.io/testnamespace/myapp:v1.0.0', digest='sha256:manifest_list')
+        # Mock _get_docker_auth to return auth
+        client._get_docker_auth = Mock(return_value={'Authorization': 'Basic dXNlcjpwYXNz'})
+
+        result = client._get_manifest_list_sub_digests(image)
+
+        assert result == {'sha256:sub1', 'sha256:sub2'}
+
+    @patch('src.registry_client.requests.get')
+    @patch('src.registry_client.oci')
+    def test_get_manifest_list_sub_digests_non_list(self, mock_oci, mock_get, config):
+        """Test _get_manifest_list_sub_digests returns empty set for non-list manifests."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+
+        single_manifest_response = {
+            'mediaType': 'application/vnd.docker.distribution.manifest.v2+json',
+            'config': {'digest': 'sha256:config123'},
+        }
+        mock_resp = Mock()
+        mock_resp.json.return_value = single_manifest_response
+        mock_resp.raise_for_status = Mock()
+        mock_get.return_value = mock_resp
+
+        image = Image('test.ocir.io/testnamespace/myapp:v1.0.0', digest='sha256:single')
+        client._get_docker_auth = Mock(return_value={'Authorization': 'Basic dXNlcjpwYXNz'})
+
+        result = client._get_manifest_list_sub_digests(image)
+
+        assert result == set()
+
+    @patch('src.registry_client.oci')
+    def test_get_manifest_list_sub_digests_no_digest(self, mock_oci, config):
+        """Test _get_manifest_list_sub_digests returns empty set when image has no digest."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+
+        image = Image('test.ocir.io/testnamespace/myapp:v1.0.0')
+        result = client._get_manifest_list_sub_digests(image)
+
+        assert result == set()
+
+    @patch('src.registry_client.requests.get')
+    @patch('src.registry_client.oci')
+    def test_get_manifest_list_sub_digests_api_error(self, mock_oci, mock_get, config):
+        """Test _get_manifest_list_sub_digests returns empty set on API error."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+        mock_get.side_effect = requests.exceptions.ConnectionError("connection refused")
+
+        image = Image('test.ocir.io/testnamespace/myapp:v1.0.0', digest='sha256:abc')
+        client._get_docker_auth = Mock(return_value={'Authorization': 'Basic dXNlcjpwYXNz'})
+
+        result = client._get_manifest_list_sub_digests(image)
+
+        assert result == set()
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_protects_sub_manifest_digests(self, mock_oci, config):
+        """Test get_old_ocir_images protects sub-manifest digests from deletion."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image('test.ocir.io/testnamespace/myapp:deployed', ocid='ocid1.image.0',
+                  created_at=now, digest='sha256:deployed_digest'),
+            Image('test.ocir.io/testnamespace/myapp:old1', ocid='ocid1.image.1',
+                  created_at=now - timedelta(days=10), digest='sha256:sub1'),
+            Image('test.ocir.io/testnamespace/myapp:old2', ocid='ocid1.image.2',
+                  created_at=now - timedelta(days=9), digest='sha256:unrelated'),
+            Image('test.ocir.io/testnamespace/myapp:old3', ocid='ocid1.image.3',
+                  created_at=now - timedelta(days=8), digest='sha256:sub2'),
+            Image('test.ocir.io/testnamespace/myapp:kept', ocid='ocid1.image.4',
+                  created_at=now - timedelta(days=1), digest='sha256:kept_digest'),
+        ]
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        # Mock _get_manifest_list_sub_digests: deployed image is a manifest list
+        def mock_sub_digests(image):
+            if image.digest == 'sha256:deployed_digest':
+                return {'sha256:sub1', 'sha256:sub2'}
+            return set()
+        client._get_manifest_list_sub_digests = Mock(side_effect=mock_sub_digests)
+
+        images = [Image('test.ocir.io/testnamespace/myapp:deployed')]
+        recommendations = client.get_old_ocir_images(images, keep_count=1)
+
+        assert len(recommendations) == 1
+        rec = recommendations[0]
+        deleted_tags = {img.tag for img in rec.tags_to_delete}
+        # old1 (sha256:sub1) and old3 (sha256:sub2) are sub-manifests and should be protected
+        assert 'old1' not in deleted_tags
+        assert 'old3' not in deleted_tags
+        # old2 (sha256:unrelated) should still be deleted
+        assert 'old2' in deleted_tags
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_no_manifest_lists_no_regression(self, mock_oci, config):
+        """Test get_old_ocir_images behaves unchanged when no manifest lists exist."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        now = datetime.now(timezone.utc)
+        cached_images = []
+        for i in range(8):
+            img = Image(
+                f'test.ocir.io/testnamespace/myapp:tag{i:02d}',
+                ocid=f'ocid1.image.{i}',
+                created_at=now - timedelta(days=i),
+                digest=f'sha256:digest{i}',
+            )
+            cached_images.append(img)
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        # No manifest lists — _get_manifest_list_sub_digests always returns empty
+        client._get_manifest_list_sub_digests = Mock(return_value=set())
+
+        images = [Image('test.ocir.io/testnamespace/myapp:tag00')]
+        recommendations = client.get_old_ocir_images(images, keep_count=3)
+
+        assert len(recommendations) == 1
+        rec = recommendations[0]
+        # 8 total - 1 deployed - 3 kept = 4 to delete
+        assert len(rec.tags_to_delete) == 4

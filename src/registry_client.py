@@ -1,5 +1,7 @@
 """OCIR registry client for fetching available image tags."""
 
+import json
+import os
 from logging import getLogger
 from typing import Optional
 from dataclasses import dataclass, field
@@ -303,13 +305,78 @@ class RegistryClient:
                     continue
                 new_image = Image(f'{image.registry}/{image.repo_name}:{tag}',
                                 ocid=item.id,
-                                created_at=item.time_created)
+                                created_at=item.time_created,
+                                digest=item.digest)
                 images.append(new_image)
 
             # Cache the results
             self._ocir_image_cache[image.repo_name] = images
             logger.debug(f"Found {len(images)} OCIR images for {image.repo_name}")
             return images
+
+    def _get_docker_auth(self, registry: str) -> Optional[dict]:
+        """Read Docker credentials for a registry from ~/.docker/config.json.
+
+        Args:
+            registry: Registry hostname (e.g., 'iad.ocir.io')
+
+        Returns:
+            Dict with Authorization header, or None if unavailable
+        """
+        try:
+            config_path = os.path.expanduser('~/.docker/config.json')
+            with open(config_path, encoding='utf-8') as f:
+                docker_config = json.load(f)
+            auths = docker_config.get('auths', {})
+            entry = auths.get(registry)
+            if entry and 'auth' in entry:
+                return {'Authorization': f'Basic {entry["auth"]}'}
+        except Exception as e:
+            logger.debug(f"Could not read Docker auth for {registry}: {e}")
+        return None
+
+    def _get_manifest_list_sub_digests(self, image: Image) -> set[str]:
+        """Fetch sub-manifest digests if the image is a manifest list.
+
+        Args:
+            image: Image with digest to check
+
+        Returns:
+            Set of sub-manifest digest strings, or empty set on any error
+        """
+        if not image.digest:
+            return set()
+
+        auth_headers = self._get_docker_auth(image.registry)
+        if not auth_headers:
+            return set()
+
+        url = f'https://{image.registry}/v2/{image.repo_name}/manifests/{image.digest}'
+        headers = {
+            **auth_headers,
+            'Accept': ', '.join([
+                'application/vnd.docker.distribution.manifest.list.v2+json',
+                'application/vnd.oci.image.index.v1+json',
+                'application/vnd.docker.distribution.manifest.v2+json',
+                'application/vnd.oci.image.manifest.v1+json',
+            ]),
+        }
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            media_type = data.get('mediaType', '')
+            if media_type in (
+                'application/vnd.docker.distribution.manifest.list.v2+json',
+                'application/vnd.oci.image.index.v1+json',
+            ):
+                manifests = data.get('manifests', [])
+                return {m['digest'] for m in manifests if 'digest' in m}
+        except Exception as e:
+            logger.debug(f"Could not fetch manifest list for {image.full_name}: {e}")
+
+        return set()
 
     def get_image_creation_date(self, image: Image) -> Optional[datetime]:
         """Get image creation date from manifest.
@@ -449,7 +516,25 @@ class RegistryClient:
                 filtered_images.sort(key=lambda im: im.created_at)
                 if len(filtered_images) <= keep_count:
                     continue
+                # Determine kept images (deployed + newest keep_count)
+                # Find the deployed image from all_images to get its digest
+                deployed_with_digest = next((im for im in all_images if im.full_name == image.full_name), image)
+                kept_images = [deployed_with_digest] + filtered_images[len(filtered_images) - keep_count:]
+                # Collect sub-manifest digests from kept images that are manifest lists
+                protected_digests = set()
+                for kept in kept_images:
+                    protected_digests.update(self._get_manifest_list_sub_digests(kept))
                 filtered_images = filtered_images[0:len(filtered_images) - keep_count]
+                # Remove images whose digest is referenced by a kept manifest list
+                if protected_digests:
+                    before_count = len(filtered_images)
+                    filtered_images = [im for im in filtered_images
+                                       if not im.digest or im.digest not in protected_digests]
+                    protected_count = before_count - len(filtered_images)
+                    if protected_count:
+                        logger.info(f'Protected {protected_count} sub-manifest images from deletion in {image.repo_name}')
+                if not filtered_images:
+                    continue
                 recommendations.append(CleanupRecommendation(image.registry, image.repo_name, filtered_images))
                 repo_names_processed.append(f'{image.registry}/{image.repo_name}')
 
