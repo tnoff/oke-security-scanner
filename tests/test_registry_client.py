@@ -544,7 +544,7 @@ class TestRegistryClient:
 
     @patch('src.registry_client.oci')
     def test_get_orphaned_manifests_basic(self, mock_oci, config):
-        """Test orphan detection: platform manifests without matching normal tag timestamps are orphans."""
+        """Test orphan detection: platform manifests not referenced by any normal tag's manifest list are orphans."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.config.from_file.return_value = mock_config
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
@@ -560,25 +560,32 @@ class TestRegistryClient:
         client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
 
         now = datetime.now(timezone.utc)
-        build1_time = now - timedelta(days=5)  # still tagged
-        build2_time = now - timedelta(days=10)  # tag deleted -> orphan
+        build1_time = now - timedelta(days=5)
+        build2_time = now - timedelta(days=10)
 
         cached_images = [
             # Normal tags
-            Image('test.ocir.io/testnamespace/myapp:v2.5.1', ocid='ocid1.image.1', created_at=build1_time),
-            Image('test.ocir.io/testnamespace/myapp:832992d', ocid='ocid1.image.2', created_at=build1_time),
-            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.3', created_at=build1_time),
-            # Platform manifests for build1 (NOT orphans - timestamp matches normal tags)
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.4', created_at=build1_time),
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.5', created_at=build1_time),
-            # Platform manifests for build2 (ORPHANS - no normal tag with this timestamp)
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ccc333', ocid='ocid1.image.6', created_at=build2_time),
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ddd444', ocid='ocid1.image.7', created_at=build2_time),
+            Image('test.ocir.io/testnamespace/myapp:v2.5.1', ocid='ocid1.image.1', created_at=build1_time, digest='sha256:tag1digest'),
+            Image('test.ocir.io/testnamespace/myapp:832992d', ocid='ocid1.image.2', created_at=build1_time, digest='sha256:tag2digest'),
+            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.3', created_at=build1_time, digest='sha256:latestdigest'),
+            # Platform manifests for build1 (NOT orphans - referenced by normal tags)
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.4', created_at=build1_time, digest='sha256:aaa111'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.5', created_at=build1_time, digest='sha256:bbb222'),
+            # Platform manifests for build2 (ORPHANS - not referenced by any normal tag)
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ccc333', ocid='ocid1.image.6', created_at=build2_time, digest='sha256:ccc333'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ddd444', ocid='ocid1.image.7', created_at=build2_time, digest='sha256:ddd444'),
         ]
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
 
-        images = {Image('test.ocir.io/testnamespace/myapp:v2.5.1')}
-        recommendations = client.get_orphaned_manifests(images)
+        # Mock manifest list resolution: normal tags reference aaa111 and bbb222
+        def mock_sub_digests(image):
+            if image.digest in ('sha256:tag1digest', 'sha256:tag2digest', 'sha256:latestdigest'):
+                return {'sha256:aaa111', 'sha256:bbb222'}
+            return set()
+
+        with patch.object(client, '_get_manifest_list_sub_digests', side_effect=mock_sub_digests):
+            images = {Image('test.ocir.io/testnamespace/myapp:v2.5.1')}
+            recommendations = client.get_orphaned_manifests(images)
 
         assert len(recommendations) == 1
         rec = recommendations[0]
@@ -590,7 +597,7 @@ class TestRegistryClient:
 
     @patch('src.registry_client.oci')
     def test_get_orphaned_manifests_no_orphans(self, mock_oci, config):
-        """Test no orphans when all platform manifests match a normal tag timestamp."""
+        """Test no orphans when all platform manifests are referenced by normal tags."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.config.from_file.return_value = mock_config
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
@@ -607,20 +614,21 @@ class TestRegistryClient:
 
         now = datetime.now(timezone.utc)
         cached_images = [
-            Image('test.ocir.io/testnamespace/myapp:v1.0.0', ocid='ocid1.image.1', created_at=now),
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.2', created_at=now),
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.3', created_at=now),
+            Image('test.ocir.io/testnamespace/myapp:v1.0.0', ocid='ocid1.image.1', created_at=now, digest='sha256:tagdigest'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.2', created_at=now, digest='sha256:aaa111'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.3', created_at=now, digest='sha256:bbb222'),
         ]
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
 
-        images = {Image('test.ocir.io/testnamespace/myapp:v1.0.0')}
-        recommendations = client.get_orphaned_manifests(images)
+        with patch.object(client, '_get_manifest_list_sub_digests', return_value={'sha256:aaa111', 'sha256:bbb222'}):
+            images = {Image('test.ocir.io/testnamespace/myapp:v1.0.0')}
+            recommendations = client.get_orphaned_manifests(images)
 
         assert len(recommendations) == 0
 
     @patch('src.registry_client.oci')
     def test_get_orphaned_manifests_all_orphans(self, mock_oci, config):
-        """Test all platform manifests are orphans when no normal tags remain."""
+        """Test all platform manifests are orphans when no normal tags reference them."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.config.from_file.return_value = mock_config
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
@@ -637,22 +645,25 @@ class TestRegistryClient:
 
         old_time = datetime.now(timezone.utc) - timedelta(days=30)
         cached_images = [
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.1', created_at=old_time),
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.2', created_at=old_time),
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ccc333', ocid='ocid1.image.3', created_at=old_time + timedelta(days=1)),
+            # A normal tag that doesn't reference any of the platform manifests
+            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.0', created_at=old_time, digest='sha256:latestdigest'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.1', created_at=old_time, digest='sha256:aaa111'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.2', created_at=old_time, digest='sha256:bbb222'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ccc333', ocid='ocid1.image.3', created_at=old_time + timedelta(days=1), digest='sha256:ccc333'),
         ]
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
 
-        # Use an image that triggers scanning this repo but isn't in the cache
-        images = {Image('test.ocir.io/testnamespace/myapp:latest')}
-        recommendations = client.get_orphaned_manifests(images)
+        # latest tag references different sub-manifests (not aaa111/bbb222/ccc333)
+        with patch.object(client, '_get_manifest_list_sub_digests', return_value={'sha256:other1', 'sha256:other2'}):
+            images = {Image('test.ocir.io/testnamespace/myapp:latest')}
+            recommendations = client.get_orphaned_manifests(images)
 
         assert len(recommendations) == 1
         assert len(recommendations[0].tags_to_delete) == 3
 
     @patch('src.registry_client.oci')
     def test_get_orphaned_manifests_latest_protected(self, mock_oci, config):
-        """Test platform manifests sharing latest's timestamp are NOT orphans."""
+        """Test platform manifests referenced by latest's manifest list are NOT orphans."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.config.from_file.return_value = mock_config
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
@@ -671,18 +682,19 @@ class TestRegistryClient:
         old_time = now - timedelta(days=30)
 
         cached_images = [
-            # Only 'latest' has this timestamp - no semver/githash tag
-            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.1', created_at=now),
-            # Platform manifests matching latest's timestamp -> NOT orphans
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.2', created_at=now),
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.3', created_at=now),
-            # Platform manifests from old deleted build -> orphans
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ccc333', ocid='ocid1.image.4', created_at=old_time),
+            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.1', created_at=now, digest='sha256:latestdigest'),
+            # Platform manifests referenced by latest -> NOT orphans
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.2', created_at=now, digest='sha256:aaa111'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.3', created_at=now, digest='sha256:bbb222'),
+            # Platform manifest NOT referenced by any tag -> orphan
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ccc333', ocid='ocid1.image.4', created_at=old_time, digest='sha256:ccc333'),
         ]
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
 
-        images = {Image('test.ocir.io/testnamespace/myapp:latest')}
-        recommendations = client.get_orphaned_manifests(images)
+        # latest references aaa111 and bbb222 but not ccc333
+        with patch.object(client, '_get_manifest_list_sub_digests', return_value={'sha256:aaa111', 'sha256:bbb222'}):
+            images = {Image('test.ocir.io/testnamespace/myapp:latest')}
+            recommendations = client.get_orphaned_manifests(images)
 
         assert len(recommendations) == 1
         assert len(recommendations[0].tags_to_delete) == 1
@@ -690,7 +702,7 @@ class TestRegistryClient:
 
     @patch('src.registry_client.oci')
     def test_get_orphaned_manifests_deployed_image_protected(self, mock_oci, config):
-        """Test platform manifests matching deployed image's timestamp are NOT orphans."""
+        """Test platform manifests referenced by deployed image's manifest list are NOT orphans."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.config.from_file.return_value = mock_config
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
@@ -711,24 +723,58 @@ class TestRegistryClient:
 
         cached_images = [
             # Currently deployed githash image
-            Image('test.ocir.io/testnamespace/myapp:a1b2c3d', ocid='ocid1.image.1', created_at=deployed_time),
-            # Platform manifests matching deployed image -> NOT orphans
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.2', created_at=deployed_time),
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.3', created_at=deployed_time),
+            Image('test.ocir.io/testnamespace/myapp:a1b2c3d', ocid='ocid1.image.1', created_at=deployed_time, digest='sha256:deployeddigest'),
+            # Platform manifests referenced by deployed image -> NOT orphans
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.2', created_at=deployed_time, digest='sha256:aaa111'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.3', created_at=deployed_time, digest='sha256:bbb222'),
             # Orphaned platform manifests from old deleted build
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ccc333', ocid='ocid1.image.4', created_at=orphan_time),
-            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ddd444', ocid='ocid1.image.5', created_at=orphan_time),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ccc333', ocid='ocid1.image.4', created_at=orphan_time, digest='sha256:ccc333'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ddd444', ocid='ocid1.image.5', created_at=orphan_time, digest='sha256:ddd444'),
         ]
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
 
-        images = {Image('test.ocir.io/testnamespace/myapp:a1b2c3d')}
-        recommendations = client.get_orphaned_manifests(images)
+        # Deployed image references aaa111 and bbb222
+        with patch.object(client, '_get_manifest_list_sub_digests', return_value={'sha256:aaa111', 'sha256:bbb222'}):
+            images = {Image('test.ocir.io/testnamespace/myapp:a1b2c3d')}
+            recommendations = client.get_orphaned_manifests(images)
 
         assert len(recommendations) == 1
         assert len(recommendations[0].tags_to_delete) == 2
         orphan_ocids = {img.ocid for img in recommendations[0].tags_to_delete}
         assert 'ocid1.image.4' in orphan_ocids
         assert 'ocid1.image.5' in orphan_ocids
+
+    @patch('src.registry_client.oci')
+    def test_get_orphaned_manifests_skips_when_no_digests_resolved(self, mock_oci, config):
+        """Test orphan detection skips repo when manifest list resolution fails entirely."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image('test.ocir.io/testnamespace/myapp:v1.0.0', ocid='ocid1.image.1', created_at=now, digest='sha256:tagdigest'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.2', created_at=now, digest='sha256:aaa111'),
+        ]
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        # Simulate manifest list resolution failure (returns empty set)
+        with patch.object(client, '_get_manifest_list_sub_digests', return_value=set()):
+            images = {Image('test.ocir.io/testnamespace/myapp:v1.0.0')}
+            recommendations = client.get_orphaned_manifests(images)
+
+        # Should skip - not delete anything when we can't resolve manifests
+        assert len(recommendations) == 0
 
     @patch('src.registry_client.oci')
     def test_delete_ocir_images(self, mock_oci, config):
