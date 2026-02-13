@@ -546,8 +546,9 @@ class RegistryClient:
 
         Multi-arch Docker builds create unknown@sha256:... platform manifests for each
         tagged image. When the parent tag is deleted, these platform manifests remain as
-        orphans. This method identifies them by comparing created_at timestamps: platform
-        manifests whose timestamp doesn't match any normal tag's timestamp are orphans.
+        orphans. This method identifies them by resolving each normal tag's manifest list
+        to find its referenced sub-manifest digests. Platform manifests whose digest is
+        not referenced by any normal tag's manifest list are orphans.
 
         Args:
             images: Set of currently deployed images
@@ -580,12 +581,24 @@ class RegistryClient:
                     repo_names_processed.append(f'{image.registry}/{image.repo_name}')
                     continue
 
-                # Collect timestamps from all normal tagged images
-                normal_timestamps = {im.created_at for im in normal_tags if im.created_at}
+                # Collect all sub-manifest digests referenced by normal tags
+                # This is the reliable way to determine which platform manifests are still needed,
+                # rather than timestamp matching which can fail when push times differ slightly
+                referenced_digests = set()
+                for tag in normal_tags:
+                    sub_digests = self._get_manifest_list_sub_digests(tag)
+                    referenced_digests.update(sub_digests)
 
-                # Orphans are platform manifests whose timestamp doesn't match any normal tag
+                if not referenced_digests:
+                    # Could not resolve any manifest lists - skip to avoid deleting needed manifests
+                    logger.warning(f'Could not resolve manifest lists for {image.repo_name}, '
+                                   f'skipping orphan detection')
+                    repo_names_processed.append(f'{image.registry}/{image.repo_name}')
+                    continue
+
+                # Orphans are platform manifests whose digest is not referenced by any normal tag
                 orphans = [im for im in platform_manifests
-                           if im.created_at not in normal_timestamps]
+                           if im.digest and im.digest not in referenced_digests]
 
                 if orphans:
                     logger.info(f'Found {len(orphans)} orphaned manifests in {image.repo_name} '
