@@ -1082,3 +1082,96 @@ class TestRegistryClient:
         rec = recommendations[0]
         # 8 total - 1 deployed - 3 kept = 4 to delete
         assert len(rec.tags_to_delete) == 4
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_excludes_platform_manifests(self, mock_oci, config):
+        """Test get_old_ocir_images ignores platform manifests (unknown@sha256:...) entirely.
+
+        Platform manifests should only be handled by get_orphaned_manifests().
+        Previously, platform manifests were mixed into the keep_count logic, which
+        could cause a kept tag's amd64 manifest to be deleted while the tag survived,
+        resulting in 'no matching manifest for linux/amd64' errors on pull.
+        """
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image('test.ocir.io/testnamespace/myapp:deployed', ocid='ocid1.image.0',
+                  created_at=now, digest='sha256:deployed_digest'),
+            Image('test.ocir.io/testnamespace/myapp:tag1', ocid='ocid1.image.1',
+                  created_at=now - timedelta(days=5), digest='sha256:tag1_digest'),
+            Image('test.ocir.io/testnamespace/myapp:tag2', ocid='ocid1.image.2',
+                  created_at=now - timedelta(days=10), digest='sha256:tag2_digest'),
+            # Platform manifests should NOT be included in keep_count or deletion
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:aaa111', ocid='ocid1.image.10',
+                  created_at=now - timedelta(days=1), digest='sha256:aaa111'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:bbb222', ocid='ocid1.image.11',
+                  created_at=now - timedelta(days=1), digest='sha256:bbb222'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ccc333', ocid='ocid1.image.12',
+                  created_at=now - timedelta(days=5), digest='sha256:ccc333'),
+            Image('test.ocir.io/testnamespace/myapp:unknown@sha256:ddd444', ocid='ocid1.image.13',
+                  created_at=now - timedelta(days=5), digest='sha256:ddd444'),
+        ]
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        client._get_manifest_list_sub_digests = Mock(return_value=set())
+
+        images = [Image('test.ocir.io/testnamespace/myapp:deployed')]
+        # keep_count=1 means keep deployed + 1 newest tag = tag1 kept, tag2 deleted
+        recommendations = client.get_old_ocir_images(images, keep_count=1)
+
+        assert len(recommendations) == 1
+        rec = recommendations[0]
+        deleted_tags = {img.tag for img in rec.tags_to_delete}
+        # Only tag2 should be deleted — platform manifests must NOT appear
+        assert deleted_tags == {'tag2'}
+        # Verify no platform manifest was included
+        for img in rec.tags_to_delete:
+            assert 'unknown@sha256:' not in img.full_name
+
+    @patch('src.registry_client.oci')
+    def test_delete_ocir_images_invalidates_cache(self, mock_oci, config):
+        """Test that delete_ocir_images invalidates the cache for modified repos."""
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+
+        mock_artifacts = Mock()
+        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        # Pre-populate cache
+        client._ocir_image_cache['testnamespace/myapp'] = [Image('test.ocir.io/testnamespace/myapp:old')]
+        client._ocir_image_cache['testnamespace/other'] = [Image('test.ocir.io/testnamespace/other:old')]
+
+        image_to_delete = Image('test.ocir.io/testnamespace/myapp:old', ocid='ocid1.image.1')
+        recommendation = CleanupRecommendation(
+            registry='test.ocir.io',
+            repository='testnamespace/myapp',
+            tags_to_delete=[image_to_delete],
+        )
+
+        client.delete_ocir_images([recommendation])
+
+        # Cache for the modified repo should be invalidated
+        assert 'testnamespace/myapp' not in client._ocir_image_cache
+        # Cache for other repos should remain
+        assert 'testnamespace/other' in client._ocir_image_cache

@@ -510,8 +510,10 @@ class RegistryClient:
                 if not image.is_ocir_image:
                     continue
                 all_images = self._get_ocir_images_via_sdk(image)
+                # Exclude platform manifests - they are handled by get_orphaned_manifests()
+                normal_images = [im for im in all_images if 'unknown@sha256:' not in im.full_name]
                 # Skip the 'latest' tag and the currently deployed image
-                filtered_images = [im for im in all_images if im.tag != 'latest' and im.full_name != image.full_name]
+                filtered_images = [im for im in normal_images if im.tag != 'latest' and im.full_name != image.full_name]
                 # Then sort so we can check against the keep count
                 filtered_images.sort(key=lambda im: im.created_at)
                 if len(filtered_images) <= keep_count:
@@ -625,6 +627,7 @@ class RegistryClient:
                 return {}
 
             images_deleted = []
+            repos_modified = set()
 
             for item in cleanup_recommendations:
                 for image in item.tags_to_delete:
@@ -636,4 +639,10 @@ class RegistryClient:
                         else:
                             raise
                     images_deleted.append(image)
+                    repos_modified.add(image.repo_name)
+
+            # Invalidate cache for modified repos so subsequent calls get fresh data
+            for repo in repos_modified:
+                self._ocir_image_cache.pop(repo, None)
+
             return images_deleted
