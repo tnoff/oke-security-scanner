@@ -314,11 +314,15 @@ class RegistryClient:
             logger.debug(f"Found {len(images)} OCIR images for {image.repo_name}")
             return images
 
-    def _get_docker_auth(self, registry: str) -> Optional[dict]:
-        """Read Docker credentials for a registry from ~/.docker/config.json.
+    def _get_docker_auth(self, image: Image) -> Optional[dict]:
+        """Get Docker V2 API auth headers for an image.
+
+        Reads Basic credentials from ~/.docker/config.json, then exchanges
+        them for a Bearer token via the registry's token endpoint (required
+        by OCIR and other registries using token-based auth).
 
         Args:
-            registry: Registry hostname (e.g., 'iad.ocir.io')
+            image: Image to authenticate for (needs registry and repo_name)
 
         Returns:
             Dict with Authorization header, or None if unavailable
@@ -328,11 +332,52 @@ class RegistryClient:
             with open(config_path, encoding='utf-8') as f:
                 docker_config = json.load(f)
             auths = docker_config.get('auths', {})
-            entry = auths.get(registry)
-            if entry and 'auth' in entry:
-                return {'Authorization': f'Basic {entry["auth"]}'}
+            entry = auths.get(image.registry)
+            if not entry or 'auth' not in entry:
+                return None
+
+            basic_auth = entry['auth']
+
+            # Try token exchange: hit /v2/ to get the token endpoint from WWW-Authenticate
+            try:
+                v2_resp = requests.get(f'https://{image.registry}/v2/',
+                                       headers={'Authorization': f'Basic {basic_auth}'},
+                                       timeout=10)
+                if v2_resp.status_code == 200:
+                    # Basic auth accepted directly
+                    return {'Authorization': f'Basic {basic_auth}'}
+
+                if v2_resp.status_code == 401:
+                    www_auth = v2_resp.headers.get('WWW-Authenticate', '')
+                    # Parse Bearer realm and service from WWW-Authenticate header
+                    realm = service = None
+                    for part in www_auth.replace('Bearer ', '').split(','):
+                        key, _, val = part.strip().partition('=')
+                        val = val.strip('"')
+                        if key == 'realm':
+                            realm = val
+                        elif key == 'service':
+                            service = val
+
+                    if realm and service:
+                        token_resp = requests.get(
+                            realm,
+                            headers={'Authorization': f'Basic {basic_auth}'},
+                            params={
+                                'service': service,
+                                'scope': f'repository:{image.repo_name}:pull',
+                            },
+                            timeout=10,
+                        )
+                        if token_resp.ok:
+                            token = token_resp.json().get('token')
+                            if token:
+                                return {'Authorization': f'Bearer {token}'}
+            except requests.RequestException as e:
+                logger.debug(f"Token exchange failed for {image.registry}: {e}")
+
         except Exception as e:
-            logger.debug(f"Could not read Docker auth for {registry}: {e}")
+            logger.debug(f"Could not read Docker auth for {image.registry}: {e}")
         return None
 
     def _get_manifest_list_sub_digests(self, image: Image) -> set[str]:
@@ -347,7 +392,7 @@ class RegistryClient:
         if not image.digest:
             return set()
 
-        auth_headers = self._get_docker_auth(image.registry)
+        auth_headers = self._get_docker_auth(image)
         if not auth_headers:
             return set()
 
