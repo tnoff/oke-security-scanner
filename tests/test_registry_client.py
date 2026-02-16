@@ -856,20 +856,61 @@ class TestRegistryClient:
 
         assert result == {}
 
+    @patch('src.registry_client.requests.get')
     @patch('builtins.open', new_callable=mock_open,
            read_data=json.dumps({'auths': {'iad.ocir.io': {'auth': 'dXNlcjpwYXNz'}}}))
     @patch('src.registry_client.oci')
-    def test_get_docker_auth_found(self, mock_oci, mock_file, config):
-        """Test _get_docker_auth returns auth header when credentials exist."""
+    def test_get_docker_auth_basic_accepted(self, mock_oci, mock_file, mock_get, config):
+        """Test _get_docker_auth returns Basic header when registry accepts it directly."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
         mock_oci.identity.IdentityClient.return_value = Mock()
         mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
 
+        # Registry accepts Basic auth directly (200)
+        mock_v2_resp = Mock()
+        mock_v2_resp.status_code = 200
+        mock_get.return_value = mock_v2_resp
+
         client = RegistryClient(config)
-        result = client._get_docker_auth('iad.ocir.io')
+        image = Image('iad.ocir.io/tnoff/myapp:v1.0.0')
+        result = client._get_docker_auth(image)
 
         assert result == {'Authorization': 'Basic dXNlcjpwYXNz'}
+
+    @patch('src.registry_client.requests.get')
+    @patch('builtins.open', new_callable=mock_open,
+           read_data=json.dumps({'auths': {'iad.ocir.io': {'auth': 'dXNlcjpwYXNz'}}}))
+    @patch('src.registry_client.oci')
+    def test_get_docker_auth_token_exchange(self, mock_oci, mock_file, mock_get, config):
+        """Test _get_docker_auth does token exchange when registry requires Bearer auth."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        # Registry returns 401 with WWW-Authenticate challenge
+        mock_v2_resp = Mock()
+        mock_v2_resp.status_code = 401
+        mock_v2_resp.headers = {
+            'WWW-Authenticate': 'Bearer realm="https://iad.ocir.io/20180419/docker/token",service="iad.ocir.io",scope=""'
+        }
+
+        # Token endpoint returns a token
+        mock_token_resp = Mock()
+        mock_token_resp.ok = True
+        mock_token_resp.json.return_value = {'token': 'my-bearer-token'}
+
+        mock_get.side_effect = [mock_v2_resp, mock_token_resp]
+
+        client = RegistryClient(config)
+        image = Image('iad.ocir.io/tnoff/myapp:v1.0.0')
+        result = client._get_docker_auth(image)
+
+        assert result == {'Authorization': 'Bearer my-bearer-token'}
+        # Verify token request included correct scope
+        token_call = mock_get.call_args_list[1]
+        assert token_call[1]['params']['scope'] == 'repository:tnoff/myapp:pull'
 
     @patch('builtins.open', side_effect=FileNotFoundError)
     @patch('src.registry_client.oci')
@@ -881,7 +922,8 @@ class TestRegistryClient:
         mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
 
         client = RegistryClient(config)
-        result = client._get_docker_auth('iad.ocir.io')
+        image = Image('iad.ocir.io/tnoff/myapp:v1.0.0')
+        result = client._get_docker_auth(image)
 
         assert result is None
 
@@ -896,7 +938,8 @@ class TestRegistryClient:
         mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
 
         client = RegistryClient(config)
-        result = client._get_docker_auth('iad.ocir.io')
+        image = Image('iad.ocir.io/tnoff/myapp:v1.0.0')
+        result = client._get_docker_auth(image)
 
         assert result is None
 
