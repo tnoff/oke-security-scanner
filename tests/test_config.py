@@ -16,6 +16,7 @@ class TestConfig:
         monkeypatch.setenv("OTLP_LOGS_ENABLED", "true")
         monkeypatch.setenv("TRIVY_SEVERITY", "CRITICAL,HIGH,MEDIUM")
         monkeypatch.setenv("TRIVY_TIMEOUT", "600")
+        monkeypatch.setenv("TRIVY_PLATFORM", "linux/arm64")
         monkeypatch.setenv("SCAN_NAMESPACES", "default,kube-system")
         monkeypatch.setenv("EXCLUDE_NAMESPACES", "kube-node-lease")
         monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/test")
@@ -34,6 +35,7 @@ class TestConfig:
         assert config.otlp_logs_enabled is True
         assert config.trivy_severity == "CRITICAL,HIGH,MEDIUM"
         assert config.trivy_timeout == 600
+        assert config.trivy_platform == "linux/arm64"
         assert config.namespaces == ["default", "kube-system"]
         assert config.exclude_namespaces == ["kube-node-lease"]
         assert config.discord_webhook_url == "https://discord.com/api/webhooks/test"
@@ -55,6 +57,7 @@ class TestConfig:
         assert config.otlp_logs_enabled is False
         assert config.trivy_severity == "CRITICAL,HIGH"
         assert config.trivy_timeout == 300
+        assert config.trivy_platform == ""
         assert config.namespaces == []
         assert config.exclude_namespaces == ["kube-system", "kube-public", "kube-node-lease"]
         assert config.discord_webhook_url == ""
@@ -133,3 +136,15 @@ class TestConfig:
         """Test OKE_CLUSTER_OCID defaults to empty string."""
         config = Config.from_env()
         assert config.oke_cluster_ocid == ""
+
+    def test_trivy_platform(self, monkeypatch):
+        """Test TRIVY_PLATFORM setting."""
+        monkeypatch.setenv("TRIVY_PLATFORM", "linux/arm64")
+
+        config = Config.from_env()
+        assert config.trivy_platform == "linux/arm64"
+
+    def test_trivy_platform_empty_by_default(self):
+        """Test TRIVY_PLATFORM defaults to empty string."""
+        config = Config.from_env()
+        assert config.trivy_platform == ""
