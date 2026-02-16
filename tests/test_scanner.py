@@ -226,6 +226,38 @@ class TestTrivyScanner:
         assert "--timeout" in call_args
         assert "300s" in call_args
 
+    @patch('src.scanner.subprocess.run')
+    def test_scan_image_command_includes_platform_when_set(self, mock_run, config, sample_trivy_results):
+        """Test that scan command includes --platform flag when TRIVY_PLATFORM is set."""
+        config.trivy_platform = "linux/arm64"
+        with patch('src.scanner.logger'):
+            scanner = TrivyScanner(config, Mock())
+
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(sample_trivy_results)
+        mock_run.return_value = mock_result
+
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        scanner.scan_image(image)
+
+        call_args = mock_run.call_args[0][0]
+        assert "--platform" in call_args
+        platform_idx = call_args.index("--platform")
+        assert call_args[platform_idx + 1] == "linux/arm64"
+
+    @patch('src.scanner.subprocess.run')
+    def test_scan_image_command_excludes_platform_when_empty(self, mock_run, scanner, sample_trivy_results):
+        """Test that scan command does not include --platform flag when TRIVY_PLATFORM is empty."""
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(sample_trivy_results)
+        mock_run.return_value = mock_result
+
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        scanner.scan_image(image)
+
+        call_args = mock_run.call_args[0][0]
+        assert "--platform" not in call_args
+
     def test_cleanup_image_cache_removes_fanal_dir(self, scanner, tmp_path):
         """Test that _cleanup_image_cache removes the fanal directory."""
         # Override cache_dir to use tmp_path

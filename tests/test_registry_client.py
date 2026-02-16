@@ -1175,3 +1175,124 @@ class TestRegistryClient:
         assert 'testnamespace/myapp' not in client._ocir_image_cache
         # Cache for other repos should remain
         assert 'testnamespace/other' in client._ocir_image_cache
+
+    @patch('src.registry_client.oci')
+    def test_old_image_cleanup_then_orphan_detection_deletes_intermediate_tags(self, mock_oci, config):
+        """End-to-end: after old tags are deleted, orphan detection finds and removes
+        their platform manifests while keeping platform manifests of surviving tags.
+
+        Scenario: 7 tagged images with 2 platform manifests each (amd64 + arm64).
+        keep_count=5, so the 2 oldest tags are deleted. Their 4 platform manifests
+        should then be detected as orphans, while the 10 platform manifests belonging
+        to the 5 kept tags + deployed remain referenced.
+        """
+        mock_config = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.config.from_file.return_value = mock_config
+
+        mock_artifacts = Mock()
+        mock_oci.artifacts.ArtifactsClient.return_value = mock_artifacts
+        mock_oci.identity.IdentityClient.return_value = Mock()
+
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        now = datetime.now(timezone.utc)
+
+        # Build the full image list: 1 deployed + 7 other tags, each with 2 platform manifests
+        # Tag layout (newest first):
+        #   deployed (day 0)  -> plat sha256:deployed_amd64, sha256:deployed_arm64
+        #   tag6 (day 1)      -> plat sha256:tag6_amd64, sha256:tag6_arm64
+        #   tag5 (day 2)      -> plat sha256:tag5_amd64, sha256:tag5_arm64
+        #   tag4 (day 3)      -> plat sha256:tag4_amd64, sha256:tag4_arm64
+        #   tag3 (day 4)      -> plat sha256:tag3_amd64, sha256:tag3_arm64
+        #   tag2 (day 5)      -> plat sha256:tag2_amd64, sha256:tag2_arm64
+        #   --- keep_count=5 boundary (tag2-tag6 kept) ---
+        #   tag1 (day 6)      -> plat sha256:tag1_amd64, sha256:tag1_arm64  <-- DELETE
+        #   tag0 (day 7)      -> plat sha256:tag0_amd64, sha256:tag0_arm64  <-- DELETE
+
+        all_images = []
+        tag_names = ['deployed'] + [f'tag{i}' for i in range(7)]
+        for idx, tag_name in enumerate(tag_names):
+            day_offset = idx  # deployed=0, tag6=1, ..., tag0=7
+            # Reverse so tag6 is newest non-deployed
+            if tag_name != 'deployed':
+                day_offset = 8 - int(tag_name.replace('tag', ''))
+            else:
+                day_offset = 0
+            created = now - timedelta(days=day_offset)
+            digest = f'sha256:{tag_name}_digest'
+
+            all_images.append(Image(
+                f'test.ocir.io/testnamespace/myapp:{tag_name}',
+                ocid=f'ocid1.image.{tag_name}',
+                created_at=created,
+                digest=digest,
+            ))
+            # Two platform manifests per tag
+            for arch in ['amd64', 'arm64']:
+                plat_digest = f'sha256:{tag_name}_{arch}'
+                all_images.append(Image(
+                    f'test.ocir.io/testnamespace/myapp:unknown@{plat_digest}',
+                    ocid=f'ocid1.image.{tag_name}_{arch}',
+                    created_at=created,
+                    digest=plat_digest,
+                ))
+
+        # Manifest list sub-digest mapping: each tag references its two platform digests
+        manifest_map = {}
+        for tag_name in tag_names:
+            manifest_map[f'sha256:{tag_name}_digest'] = {
+                f'sha256:{tag_name}_amd64', f'sha256:{tag_name}_arm64',
+            }
+
+        def mock_sub_digests(image):
+            return manifest_map.get(image.digest, set())
+        client._get_manifest_list_sub_digests = Mock(side_effect=mock_sub_digests)
+
+        # --- Step 1: get_old_ocir_images ---
+        client._ocir_image_cache['testnamespace/myapp'] = list(all_images)
+        images = {Image('test.ocir.io/testnamespace/myapp:deployed')}
+        old_recommendations = client.get_old_ocir_images(images, keep_count=5)
+
+        assert len(old_recommendations) == 1
+        old_rec = old_recommendations[0]
+        old_deleted_tags = {img.tag for img in old_rec.tags_to_delete}
+        # Only the 2 oldest normal tags should be marked for deletion
+        assert old_deleted_tags == {'tag0', 'tag1'}
+        # No platform manifests should appear
+        for img in old_rec.tags_to_delete:
+            assert 'unknown@sha256:' not in img.full_name
+
+        # --- Step 2: simulate deletion + cache invalidation ---
+        client.delete_ocir_images(old_recommendations)
+        assert 'testnamespace/myapp' not in client._ocir_image_cache
+
+        # --- Step 3: get_orphaned_manifests with fresh data (tags deleted) ---
+        # Simulate what OCIR returns after the old tags were deleted:
+        # tag0 and tag1 are gone, their platform manifests remain as orphans
+        post_deletion_images = [im for im in all_images
+                                if im.tag not in ('tag0', 'tag1')]
+        client._ocir_image_cache['testnamespace/myapp'] = post_deletion_images
+
+        orphan_recommendations = client.get_orphaned_manifests(
+            {Image('test.ocir.io/testnamespace/myapp:deployed')},
+        )
+
+        assert len(orphan_recommendations) == 1
+        orphan_rec = orphan_recommendations[0]
+        orphan_digests = {img.digest for img in orphan_rec.tags_to_delete}
+        # The 4 platform manifests from tag0 and tag1 should be orphans
+        assert orphan_digests == {
+            'sha256:tag0_amd64', 'sha256:tag0_arm64',
+            'sha256:tag1_amd64', 'sha256:tag1_arm64',
+        }
+        # Platform manifests for kept tags must NOT be in orphans
+        for kept_tag in ['deployed', 'tag2', 'tag3', 'tag4', 'tag5', 'tag6']:
+            assert f'sha256:{kept_tag}_amd64' not in orphan_digests
+            assert f'sha256:{kept_tag}_arm64' not in orphan_digests

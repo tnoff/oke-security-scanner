@@ -18,6 +18,7 @@ class Config:
     # Trivy configuration
     trivy_severity: str
     trivy_timeout: int
+    trivy_platform: str
 
     # Scanning configuration
     namespaces: list[str]
@@ -49,6 +50,7 @@ class Config:
             # Trivy configuration
             trivy_severity=os.getenv("TRIVY_SEVERITY", "CRITICAL,HIGH"),
             trivy_timeout=int(os.getenv("TRIVY_TIMEOUT", "300")),
+            trivy_platform=os.getenv("TRIVY_PLATFORM", ""),
 
             # Scanning configuration
             namespaces=os.getenv("SCAN_NAMESPACES", "").split(",") if os.getenv("SCAN_NAMESPACES") else [],

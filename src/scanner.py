@@ -151,15 +151,18 @@ class TrivyScanner:
             logger.info(f'Scanning image {image.full_name}')
             try:
                 # Run Trivy scan
+                cmd = [
+                    "trivy",
+                    "image",
+                    "--format", "json",
+                    "--severity", self.cfg.trivy_severity,
+                    "--timeout", f"{self.cfg.trivy_timeout}s",
+                ]
+                if self.cfg.trivy_platform:
+                    cmd.extend(["--platform", self.cfg.trivy_platform])
+                cmd.append(image.full_name)
                 result = subprocess.run(
-                    [
-                        "trivy",
-                        "image",
-                        "--format", "json",
-                        "--severity", self.cfg.trivy_severity,
-                        "--timeout", f"{self.cfg.trivy_timeout}s",
-                        image.full_name,
-                    ],
+                    cmd,
                     capture_output=True,
                     text=True,
                     timeout=self.cfg.trivy_timeout + 30,

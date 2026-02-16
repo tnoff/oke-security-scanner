@@ -16,6 +16,7 @@ def base_config():
         otlp_logs_enabled=True,
         trivy_severity="CRITICAL,HIGH",
         trivy_timeout=300,
+        trivy_platform="",
         namespaces=[],
         exclude_namespaces=["kube-system", "kube-public"],
         discord_webhook_url="",
