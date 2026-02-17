@@ -1,5 +1,5 @@
 pylint==4.0.4
-tox==4.36.0
+tox==4.36.1
 
 # Testing
 pytest==9.0.2
