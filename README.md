@@ -9,6 +9,7 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 | Security Scanner | No | Fetches all images in K8s cluster and runs trivy scanner |
 | Image Update Report | No | Checks for new versions of deployed images |
 | Image Cleanup | Yes | Cleanup OCIR images that do not match semver versioning |
+| OKE Node Image Check | Yes | Reports outdated OKE node/boot images for node pools |
 | Cache Management | No | Automatic cleanup of Trivy image cache after each scan to minimize disk usage |
 
 ## Install and Usage
@@ -84,12 +85,15 @@ All configuration is provided via Kubernetes secrets as environment variables:
 | `OTLP_LOGS_ENABLED` | No | `true` | Enable OTLP logs export |
 | `TRIVY_SEVERITY` | No | `CRITICAL,HIGH` | Vulnerability severities to report |
 | `TRIVY_TIMEOUT` | No | `300` | Scan timeout in seconds |
+| `TRIVY_PLATFORM` | No | (auto) | Target platform for Trivy scans (e.g. `linux/amd64`) |
 | `SCAN_NAMESPACES` | No | (all) | Comma-separated namespaces to scan |
 | `EXCLUDE_NAMESPACES` | No | `kube-system,...` | Namespaces to exclude |
 | `DISCORD_WEBHOOK_URL` | No | (disabled) | Discord webhook URL for scan notifications |
 | `OCIR_CLEANUP_ENABLED` | No | `false` | Enable automatic deletion of old OCIR commit hash tags |
 | `OCIR_CLEANUP_KEEP_COUNT` | No | `5` | Number of recent commit hash tags to keep per repository |
 | `OCIR_EXTRA_REPOSITORIES` | No | `''` | Check extra repos for old images to remove |
+| `OKE_IMAGE_CHECK_ENABLED` | No | `false` | Enable OKE node image version checking |
+| `OKE_CLUSTER_OCID` | No | (required if enabled) | OCID of the OKE cluster to check node images for |
 
 
 ## Required Permissions

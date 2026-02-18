@@ -5,6 +5,34 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.7] - 2026-02-17
+
+### Added
+- **OKE node image scanning** (`OKE_IMAGE_CHECK_ENABLED`, `OKE_CLUSTER_OCID`)
+  - Scans boot volume and worker node images used by OKE node pools
+  - Reports outdated node images in Discord notifications and CSV
+  - New `src/oke_client.py` module for OCI Container Engine API interactions
+- **Trivy platform configuration** (`TRIVY_PLATFORM`)
+  - Allows specifying the target platform for Trivy scans (e.g., `linux/amd64`)
+  - Useful for multi-arch images scanned from a different architecture host
+- **OCIR image deletion**
+  - Automatically deletes old commit-hash images beyond the configured keep count
+  - Handles multi-arch manifest lists — protects sub-manifests of kept images from deletion
+  - Failed scan count included in Discord report summary
+- **Image cleanup CSV section**
+  - OCIR image cleanup results appended as a third section in the CSV attachment
+
+### Fixed
+- **OCIR auth for manifest fetches** — corrected authentication flow when fetching image manifests via Docker V2 API
+- **Intermediate image layer deletion** — only leaf image tags are deleted; shared intermediate layers are preserved
+- **Orphan deletion bug** — orphaned tags (images not referenced by any running pod) are now correctly identified and removed
+- **Image digest retrieval** — OCIR cleanup now fetches the correct digest before attempting deletion
+- **Cache removal between scans** — Trivy `fanal/` cache is reliably removed after each image scan
+- **Commit hash comparison in version logic** — git hash tags are now included in latest-version comparisons
+- **Semver bug with multiple images** — fixed edge case where multiple images sharing a registry caused incorrect version comparisons
+- **Critical CVE table newline formatting**
+- **Commit hash output and delete message formatting**
+
 ## [0.0.6] - 2026-01-04
 
 ### Fixed
