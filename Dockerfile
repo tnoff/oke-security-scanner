@@ -12,7 +12,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Trivy from GitHub releases
-ARG TRIVY_VERSION=v0.61.1
+ARG TRIVY_VERSION=v0.69.2
 RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh |  sh -s -- -b /usr/local/bin ${TRIVY_VERSION}
 
 # Pre-download Trivy vulnerability database
