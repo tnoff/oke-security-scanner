@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from typing import Optional
 
-from opentelemetry.sdk._logs import LoggingHandler
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry import trace
 
 from .config import Config

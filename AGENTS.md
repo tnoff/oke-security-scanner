@@ -489,7 +489,7 @@ docker build -t oke-security-scanner:dev .
 ### Running code quality checks
 ```bash
 # Install test dependencies
-pip install -r test-requirements.txt
+pip install -r tests/requirements.txt
 
 # Run pylint on all source files
 pylint src/

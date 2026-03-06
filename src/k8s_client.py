@@ -8,7 +8,7 @@ from typing import Self, Optional
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from opentelemetry.sdk._logs import LoggingHandler
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry import trace
 
 from .config import Config
