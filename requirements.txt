@@ -6,9 +6,10 @@ oci==2.168.0
 
 # OpenTelemetry for observability
 opentelemetry-api
-opentelemetry-sdk==1.39.1
+opentelemetry-sdk==1.40.0
 opentelemetry-exporter-otlp
 opentelemetry-instrumentation
+opentelemetry-instrumentation-logging
 
 # Discord webhook notifications
 requests

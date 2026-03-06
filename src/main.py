@@ -5,7 +5,8 @@ import logging
 from logging import getLogger
 from typing import Tuple, Optional
 
-from opentelemetry.sdk._logs import LoggingHandler, LoggerProvider
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry.sdk.trace import TracerProvider
 
 from .config import Config
