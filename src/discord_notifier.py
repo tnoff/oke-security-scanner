@@ -145,18 +145,24 @@ class DiscordNotifier:
             content = full_report_table.print()
         self._send_message(content)
 
-    def send_deletion_results(self, images: list[Image]):
+    def send_deletion_results(self, images: list[Image], is_orphaned: bool = False):
         '''Send deletion results'''
+        prefix = '## Images Deleted\n'
+        if is_orphaned:
+            prefix = '## Orphan Intermediate Images Deleted\n'
         full_report_table = DapperTable(header_options=DapperTableHeaderOptions([
             DapperTableHeader('Image', 64),
             DapperTableHeader('Tag', 12),
         ]), pagination_options=PaginationLength(self.max_length), enclosure_start='```', enclosure_end='```',
-        prefix='## Images Deleted\n')
+        prefix=prefix)
 
         for image in images:
+            output_tag = image.tag
+            if image.tag == 'unknown':
+                output_tag = image.digest
             full_report_table.add_row([
                 f'{image.registry}/{image.repo_name}',
-                image.tag,
+                output_tag,
             ])
         content = []
         if full_report_table.size < 1:
