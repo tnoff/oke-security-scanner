@@ -9,6 +9,7 @@ opentelemetry-api
 opentelemetry-sdk==1.40.0
 opentelemetry-exporter-otlp
 opentelemetry-instrumentation
+opentelemetry-instrumentation-logging
 
 # Discord webhook notifications
 requests
