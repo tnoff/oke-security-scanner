@@ -143,7 +143,7 @@ def main():
             if config.discord_webhook_url:
                 logger.debug("Sending Discord webhook notification...")
                 notifier = DiscordNotifier(config.discord_webhook_url)
-                notifier.send_deletion_results(orphans_deleted)
+                notifier.send_deletion_results(orphans_deleted, is_orphaned=True)
 
         # Check for OKE node image updates (if enabled)
         if config.oke_image_check_enabled:
