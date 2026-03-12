@@ -117,16 +117,16 @@ def main():
             images, keep_count=config.ocir_cleanup_keep_count,
             extra_repositories=config.ocir_extra_repositories,
         )
-        if config.discord_webhook_url:
-            logger.debug("Sending Discord webhook notification...")
-            notifier = DiscordNotifier(config.discord_webhook_url)
-            notifier.send_cleanup_recommendations(cleanup_recommendations)
         if config.ocir_cleanup_enabled:
             deletion_results = registry_client.delete_ocir_images(cleanup_recommendations)
             if config.discord_webhook_url:
                 logger.debug("Sending Discord webhook notification...")
                 notifier = DiscordNotifier(config.discord_webhook_url)
                 notifier.send_deletion_results(deletion_results)
+        elif config.discord_webhook_url:
+            logger.debug("Sending Discord webhook notification...")
+            notifier = DiscordNotifier(config.discord_webhook_url)
+            notifier.send_cleanup_recommendations(cleanup_recommendations)
 
         # Orphan manifest cleanup
         logger.info("Checking for orphaned platform manifests...")

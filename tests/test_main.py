@@ -172,6 +172,119 @@ class TestMain:
     @patch('src.main.TrivyScanner')
     @patch('src.main.KubernetesClient')
     @patch('src.main.RegistryClient')
+    @patch('src.main.sys')
+    def test_main_cleanup_enabled_skips_recommendations_sends_deletion(
+        self,
+        mock_sys,
+        mock_registry_client,
+        mock_k8s_client,
+        mock_scanner,
+        mock_create_metrics,
+        mock_setup_telemetry,
+        mock_config_class,
+        mock_logging,
+        mock_discord
+    ):
+        """When cleanup is enabled, send_cleanup_recommendations is skipped and send_deletion_results is sent."""
+        mock_config = Mock()
+        mock_config.discord_webhook_url = "https://discord.com/webhook"
+        mock_config.ocir_cleanup_enabled = True
+        mock_config.ocir_cleanup_keep_count = 5
+        mock_config.ocir_extra_repositories = []
+        mock_config.oke_image_check_enabled = False
+        mock_config_class.from_env.return_value = mock_config
+
+        mock_setup_telemetry.return_value = (None, None, None)
+        mock_create_metrics.return_value = None
+
+        mock_scanner_instance = Mock()
+        mock_scanner_instance.update_database.return_value = True
+        mock_scanner_instance.scan_image.return_value = None
+        mock_scanner.return_value = mock_scanner_instance
+
+        mock_k8s_instance = Mock()
+        mock_k8s_instance.get_all_images.return_value = set()
+        mock_k8s_client.return_value = mock_k8s_instance
+
+        mock_registry_instance = Mock()
+        mock_registry_instance.check_image_updates.return_value = []
+        mock_registry_instance.get_old_ocir_images.return_value = []
+        mock_registry_instance.delete_ocir_images.return_value = []
+        mock_registry_instance.get_orphaned_manifests.return_value = []
+        mock_registry_client.return_value = mock_registry_instance
+
+        mock_notifier = Mock()
+        mock_discord.return_value = mock_notifier
+
+        main()
+
+        mock_notifier.send_cleanup_recommendations.assert_not_called()
+        mock_notifier.send_deletion_results.assert_called()
+
+    @patch('src.main.DiscordNotifier')
+    @patch('src.main.logging')
+    @patch('src.main.Config')
+    @patch('src.main.setup_telemetry')
+    @patch('src.main.create_metrics')
+    @patch('src.main.TrivyScanner')
+    @patch('src.main.KubernetesClient')
+    @patch('src.main.RegistryClient')
+    @patch('src.main.sys')
+    def test_main_cleanup_disabled_sends_recommendations_skips_deletion(
+        self,
+        mock_sys,
+        mock_registry_client,
+        mock_k8s_client,
+        mock_scanner,
+        mock_create_metrics,
+        mock_setup_telemetry,
+        mock_config_class,
+        mock_logging,
+        mock_discord
+    ):
+        """When cleanup is disabled, send_cleanup_recommendations is sent and send_deletion_results is skipped."""
+        mock_config = Mock()
+        mock_config.discord_webhook_url = "https://discord.com/webhook"
+        mock_config.ocir_cleanup_enabled = False
+        mock_config.ocir_cleanup_keep_count = 5
+        mock_config.ocir_extra_repositories = []
+        mock_config.oke_image_check_enabled = False
+        mock_config_class.from_env.return_value = mock_config
+
+        mock_setup_telemetry.return_value = (None, None, None)
+        mock_create_metrics.return_value = None
+
+        mock_scanner_instance = Mock()
+        mock_scanner_instance.update_database.return_value = True
+        mock_scanner_instance.scan_image.return_value = None
+        mock_scanner.return_value = mock_scanner_instance
+
+        mock_k8s_instance = Mock()
+        mock_k8s_instance.get_all_images.return_value = set()
+        mock_k8s_client.return_value = mock_k8s_instance
+
+        mock_registry_instance = Mock()
+        mock_registry_instance.check_image_updates.return_value = []
+        mock_registry_instance.get_old_ocir_images.return_value = []
+        mock_registry_instance.get_orphaned_manifests.return_value = []
+        mock_registry_client.return_value = mock_registry_instance
+
+        mock_notifier = Mock()
+        mock_discord.return_value = mock_notifier
+
+        main()
+
+        mock_notifier.send_cleanup_recommendations.assert_called()
+        mock_notifier.send_deletion_results.assert_not_called()
+
+    @patch('src.main.DiscordNotifier')
+    @patch('src.main.logging')
+    @patch('src.main.Config')
+    @patch('src.main.setup_telemetry')
+    @patch('src.main.create_metrics')
+    @patch('src.main.TrivyScanner')
+    @patch('src.main.KubernetesClient')
+    @patch('src.main.RegistryClient')
     def test_main_exception_still_flushes_telemetry(
         self,
         mock_registry_client,
