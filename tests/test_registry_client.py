@@ -417,6 +417,151 @@ class TestRegistryClient:
         assert str(result[0].latest) == '2.0.0'
 
     @patch('src.registry_client.oci')
+    def test_normalize_dockerhub_repo_strips_prefix(self, mock_oci, config):
+        """Test _normalize_dockerhub_repo strips docker.io/ and adds library/ for official images."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+        client = RegistryClient(config)
+
+        assert client._normalize_dockerhub_repo("docker.io/redis") == "library/redis"
+        assert client._normalize_dockerhub_repo("redis") == "library/redis"
+        assert client._normalize_dockerhub_repo("docker.io/grafana/grafana") == "grafana/grafana"
+        assert client._normalize_dockerhub_repo("grafana/grafana") == "grafana/grafana"
+
+    @patch('src.registry_client.requests.get')
+    @patch('src.registry_client.oci')
+    def test_get_image_versions_dockerhub_strips_prefix(self, mock_oci, mock_get, config):
+        """Test get_image_versions strips docker.io/ prefix when calling Docker Hub API."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        mock_response = Mock()
+        mock_response.json.return_value = {"results": [{"name": "7.4.2"}, {"name": "7.4.1"}]}
+        mock_get.return_value = mock_response
+
+        client = RegistryClient(config)
+        image = Image("docker.io/redis:7.4.2")
+        result = client.get_image_versions(image)
+
+        called_url = mock_get.call_args[0][0]
+        assert "docker.io" not in called_url
+        assert "library/redis" in called_url
+
+    @patch('src.registry_client.requests.get')
+    @patch('src.registry_client.oci')
+    def test_check_image_updates_handles_http_error(self, mock_oci, mock_get, config):
+        """Test check_image_updates logs warning and continues on HTTPError."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        mock_response = Mock()
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
+        mock_get.return_value = mock_response
+
+        client = RegistryClient(config)
+        image = Image("docker.io/redis:7.4.2")
+        result = client.check_image_updates([image])
+
+        assert result == []
+
+    @patch('src.registry_client.requests.get')
+    @patch('src.registry_client.oci')
+    def test_get_image_versions_dockerhub_excludes_latest_tag(self, mock_oci, mock_get, config):
+        """Test get_image_versions filters out the 'latest' tag from Docker Hub results."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        mock_response = Mock()
+        mock_response.json.return_value = {"results": [{"name": "7.4.2"}, {"name": "latest"}]}
+        mock_get.return_value = mock_response
+
+        client = RegistryClient(config)
+        image = Image("docker.io/redis:7.4.2")
+        result = client.get_image_versions(image)
+
+        tags = [img.tag for img in result]
+        assert "latest" not in tags
+        assert "7.4.2" in tags
+
+    @patch('src.registry_client.requests.get')
+    @patch('src.registry_client.oci')
+    def test_get_image_versions_dockerhub_returns_normalized_image_names(self, mock_oci, mock_get, config):
+        """Test get_image_versions returns Image objects without the docker.io/ prefix."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        mock_response = Mock()
+        mock_response.json.return_value = {"results": [{"name": "7.4.2"}]}
+        mock_get.return_value = mock_response
+
+        client = RegistryClient(config)
+        image = Image("docker.io/redis:7.4.2")
+        result = client.get_image_versions(image)
+
+        assert len(result) == 1
+        assert "docker.io" not in result[0].full_name
+        assert result[0].full_name == "library/redis:7.4.2"
+
+    @patch('src.registry_client.requests.get')
+    @patch('src.registry_client.oci')
+    def test_get_image_versions_dockerhub_org_image_no_library_prefix(self, mock_oci, mock_get, config):
+        """Test get_image_versions does not add library/ prefix for org-namespaced images."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        mock_response = Mock()
+        mock_response.json.return_value = {"results": [{"name": "10.0.0"}]}
+        mock_get.return_value = mock_response
+
+        client = RegistryClient(config)
+        image = Image("grafana/grafana:10.0.0")
+        result = client.get_image_versions(image)
+
+        called_url = mock_get.call_args[0][0]
+        assert "library" not in called_url
+        assert "grafana/grafana" in called_url
+        assert len(result) == 1
+        assert result[0].full_name == "grafana/grafana:10.0.0"
+
+    @patch('src.registry_client.requests.get')
+    @patch('src.registry_client.oci')
+    def test_check_image_updates_continues_after_http_error(self, mock_oci, mock_get, config):
+        """Test check_image_updates returns results for successful images after one fails with HTTPError."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        error_response = Mock()
+        error_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
+
+        ok_response = Mock()
+        ok_response.raise_for_status.return_value = None
+        ok_response.json.return_value = {"results": [{"name": "7.4.3"}, {"name": "7.4.2"}]}
+
+        mock_get.side_effect = [error_response, ok_response]
+
+        client = RegistryClient(config)
+        failing_image = Image("docker.io/redis:7.4.2")
+        ok_image = Image("grafana/grafana:7.4.2")
+        result = client.check_image_updates([failing_image, ok_image])
+
+        assert len(result) == 1
+        assert result[0].repo_name == "grafana/grafana"
+
+    @patch('src.registry_client.oci')
     def test_get_old_ocir_images_returns_cleanup_recommendations(self, mock_oci, config):
         """Test get_old_ocir_images returns CleanupRecommendation for old images."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
