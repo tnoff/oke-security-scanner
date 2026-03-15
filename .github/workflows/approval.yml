@@ -1,0 +1,32 @@
+name: Dependabot Auto Approve
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  # boto3 and friends: all update types
+  auto-approve-specific:
+    uses: tnoff/github-workflows/.github/workflows/dependabot-auto-approve.yml@39e12f56e2a091e61ba84b1d8615d176f11f49a2
+    with:
+      accept_packages: 'oci'
+      allowed_update_types: 'minor,patch'
+    secrets:
+      bot_token: ${{ secrets.APPROVAL_BOT_PAT }}
+
+  # test requirements: any update type, filtered by path
+  auto-approve-test-reqs:
+    uses: tnoff/github-workflows/.github/workflows/dependabot-auto-approve.yml@39e12f56e2a091e61ba84b1d8615d176f11f49a2
+    with:
+      file_pattern: 'tests/**'
+      allowed_update_types: 'major,minor,patch'
+    secrets:
+      bot_token: ${{ secrets.APPROVAL_BOT_PAT }}
+
+  # everything else: patch only
+  auto-approve-patch:
+    uses: tnoff/github-workflows/.github/workflows/dependabot-auto-approve.yml@39e12f56e2a091e61ba84b1d8615d176f11f49a2
+    with:
+      allowed_update_types: 'patch'
+    secrets:
+      bot_token: ${{ secrets.APPROVAL_BOT_PAT }}
