@@ -445,6 +445,14 @@ class RegistryClient:
                 return None
             return None
 
+    def _normalize_dockerhub_repo(self, repo_name: str) -> str:
+        """Strip docker.io/ prefix and qualify official images with library/."""
+        if repo_name.startswith("docker.io/"):
+            repo_name = repo_name[len("docker.io/"):]
+        if "/" not in repo_name:
+            repo_name = f"library/{repo_name}"
+        return repo_name
+
     def get_image_versions(self, image: Image) -> list[Image]:
         """Fetch all tags for a given image repository.
 
@@ -468,12 +476,13 @@ class RegistryClient:
 
             if image.registry == "docker.io":
                 # Docker Hub API v2
-                url = f"https://hub.docker.com/v2/repositories/{image.repo_name}/tags?page_size=200"
+                repo = self._normalize_dockerhub_repo(image.repo_name)
+                url = f"https://hub.docker.com/v2/repositories/{repo}/tags?page_size=200"
                 response = requests.get(url, timeout=10)
                 response.raise_for_status()
                 data = response.json()
-                tags = [result["name"] for result in data.get("results", []) if result != 'latest']
-                return [Image(f'{image.repo_name}:{tag}') for tag in tags]
+                tags = [result["name"] for result in data.get("results", []) if result["name"] != 'latest']
+                return [Image(f'{repo}:{tag}') for tag in tags]
 
             url = f"https://{image.registry}/v2/{image.repo_name}/tags/list"
             headers = {}
@@ -522,7 +531,11 @@ class RegistryClient:
                     continue
                 if image.is_ocir_image and image.version.is_githash and not image.created_at:
                     image.created_at = self.get_image_creation_date(image)
-                available_tags = self.get_image_versions(image)
+                try:
+                    available_tags = self.get_image_versions(image)
+                except requests.exceptions.HTTPError as e:
+                    logger.warning(f"Could not fetch tags for {image}: {e}")
+                    continue
 
                 # Filter non server images when original is a semver
                 if image.version.is_semver:
