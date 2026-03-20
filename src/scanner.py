@@ -123,7 +123,7 @@ class TrivyScanner:
         with tracer.start_as_current_span(f'{OTEL_SPAN_PREFIX}.update_db') as span:
             try:
                 subprocess.run(
-                    ["trivy", "image", "--download-db-only"],
+                    ["nice", "-n", "15", "trivy", "image", "--download-db-only"],
                     capture_output=True,
                     text=True,
                     timeout=120,
@@ -152,11 +152,13 @@ class TrivyScanner:
             try:
                 # Run Trivy scan
                 cmd = [
+                    "nice", "-n", "15",
                     "trivy",
                     "image",
                     "--format", "json",
                     "--severity", self.cfg.trivy_severity,
                     "--timeout", f"{self.cfg.trivy_timeout}s",
+                    "--skip-db-update",
                 ]
                 if self.cfg.trivy_platform:
                     cmd.extend(["--platform", self.cfg.trivy_platform])
