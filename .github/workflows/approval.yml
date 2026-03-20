@@ -7,6 +7,9 @@ on:
 jobs:
   # boto3 and friends: all update types
   auto-approve-specific:
+    permissions:
+      contents: write
+      pull-requests: write
     uses: tnoff/github-workflows/.github/workflows/dependabot-auto-approve.yml@bbe97497e09b0f728446f9f3a93daa897e2d64a1
     with:
       accept_packages: 'oci'
@@ -16,6 +19,9 @@ jobs:
 
   # test requirements: any update type, filtered by path
   auto-approve-test-reqs:
+    permissions:
+      contents: write
+      pull-requests: write
     uses: tnoff/github-workflows/.github/workflows/dependabot-auto-approve.yml@bbe97497e09b0f728446f9f3a93daa897e2d64a1
     with:
       file_pattern: 'tests/**'
@@ -25,6 +31,9 @@ jobs:
 
   # everything else: patch only
   auto-approve-patch:
+    permissions:
+      contents: write
+      pull-requests: write
     uses: tnoff/github-workflows/.github/workflows/dependabot-auto-approve.yml@bbe97497e09b0f728446f9f3a93daa897e2d64a1
     with:
       allowed_update_types: 'patch'
