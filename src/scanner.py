@@ -217,7 +217,7 @@ class TrivyScanner:
 
                 # Log individual critical/high vulnerabilities
                 if severity in ["CRITICAL", "HIGH"]:
-                    logger.warning(
+                    logger.info(
                         f"{severity} vulnerability found: {cve_id} in "
                         f"{vuln.get('PkgName')} {vuln.get('InstalledVersion')} "
                         f"(fixed: {vuln.get('FixedVersion')}) - {vuln.get('Title', '')[:100]}"

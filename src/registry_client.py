@@ -92,7 +92,7 @@ class RegistryClient:
             return self._oci_namespace
 
         if not self.object_client:
-            logger.warning("Object Storage client not available, cannot fetch OCI namespace")
+            logger.info("Object Storage client not available, cannot fetch OCI namespace")
             return None
 
         try:
@@ -100,7 +100,7 @@ class RegistryClient:
             logger.debug(f"Retrieved OCI namespace: {self._oci_namespace}")
             return self._oci_namespace
         except Exception as e:
-            logger.warning(f"Failed to get OCI namespace from Object Storage API: {e}")
+            logger.info(f"Failed to get OCI namespace from Object Storage API: {e}")
             return None
 
     @property
@@ -119,13 +119,13 @@ class RegistryClient:
             return self._oci_registry
 
         if not self.oci_config:
-            logger.warning("OCI config not available, cannot derive registry URL")
+            logger.info("OCI config not available, cannot derive registry URL")
             return None
 
         try:
             region = self.oci_config.get('region')
             if not region:
-                logger.warning("No region found in OCI config")
+                logger.info("No region found in OCI config")
                 return None
 
             # Find the region key by looking up the region identifier
@@ -140,10 +140,10 @@ class RegistryClient:
                 logger.debug(f"Derived OCI registry from region {region}: {self._oci_registry}")
                 return self._oci_registry
 
-            logger.warning(f"Could not find region key for region: {region}")
+            logger.info(f"Could not find region key for region: {region}")
             return None
         except Exception as e:
-            logger.warning(f"Failed to derive OCI registry from config: {e}")
+            logger.info(f"Failed to derive OCI registry from config: {e}")
             return None
 
     def _strip_namespace_prefix(self, repository: str) -> str:
@@ -255,7 +255,7 @@ class RegistryClient:
                     logger.debug(f"Error checking compartment {compartment_id}: {e.message}")
                     continue
 
-            logger.warning(f"Repository {repository} not found in any accessible compartment")
+            logger.info(f"Repository {repository} not found in any accessible compartment")
             return None
 
     def _get_ocir_images_via_sdk(self, image: Image) -> list[Image]:
@@ -285,7 +285,7 @@ class RegistryClient:
             # Find which compartment contains this repository
             compartment_id = self._find_repository_compartment(repository)
             if not compartment_id:
-                logger.warning(f"Could not find compartment for repository {image.repo_name}")
+                logger.info(f"Could not find compartment for repository {image.repo_name}")
                 return []
             # List all container images in the repository (with pagination)
             response = oci.pagination.list_call_get_all_results(
@@ -471,7 +471,7 @@ class RegistryClient:
                           if im.tag != 'latest' and 'unknown@' not in im.full_name]
                 if images:
                     return images
-                logger.warning(f"No images found for OCIR repository: {image.repo_name}")
+                logger.info(f"No images found for OCIR repository: {image.repo_name}")
                 return []
 
             if image.registry == "docker.io":
@@ -534,14 +534,14 @@ class RegistryClient:
                 try:
                     available_tags = self.get_image_versions(image)
                 except requests.exceptions.HTTPError as e:
-                    logger.warning(f"Could not fetch tags for {image}: {e}")
+                    logger.info(f"Could not fetch tags for {image}: {e}")
                     continue
 
                 # Filter non server images when original is a semver
                 if image.version.is_semver:
                     available_tags = self.filter_non_semvers(available_tags)
                 if not available_tags:
-                    logger.warning(f'Unable to find new tags for image {image.full_name}')
+                    logger.info(f'Unable to find new tags for image {image.full_name}')
                     continue
                 newest_version = self.get_latest_version(available_tags)
                 if image.version != newest_version.version:
@@ -651,8 +651,8 @@ class RegistryClient:
 
                 if not referenced_digests:
                     # Could not resolve any manifest lists - skip to avoid deleting needed manifests
-                    logger.warning(f'Could not resolve manifest lists for {image.repo_name}, '
-                                   f'skipping orphan detection')
+                    logger.info(f'Could not resolve manifest lists for {image.repo_name}, '
+                                f'skipping orphan detection')
                     repo_names_processed.append(f'{image.registry}/{image.repo_name}')
                     continue
 
@@ -681,7 +681,7 @@ class RegistryClient:
         """
         with tracer.start_as_current_span(f'{OTEL_PREFIX}.delete_old_images'):
             if not self.artifacts_client:
-                logger.warning("OCI SDK not available, cannot delete OCIR images")
+                logger.info("OCI SDK not available, cannot delete OCIR images")
                 return {}
 
             images_deleted = []
