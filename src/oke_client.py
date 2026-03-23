@@ -67,7 +67,7 @@ def parse_image_date(image_name: str) -> Optional[datetime]:
         try:
             return datetime.strptime(date_str, '%Y.%m.%d')
         except ValueError:
-            logger.warning(f"Failed to parse date from image name: {image_name}")
+            logger.info(f"Failed to parse date from image name: {image_name}")
             return None
     return None
 
@@ -118,11 +118,11 @@ class OKEClient:
         """
         with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_node_pools'):
             if not self.container_engine_client:
-                logger.warning("Container Engine client not available")
+                logger.info("Container Engine client not available")
                 return []
 
             if not self.config.oke_cluster_ocid:
-                logger.warning("OKE_CLUSTER_OCID not configured")
+                logger.info("OKE_CLUSTER_OCID not configured")
                 return []
 
             node_pools = []
@@ -149,7 +149,7 @@ class OKEClient:
                                 image = self.compute_client.get_image(image_id).data
                                 image_name = image.display_name
                             except Exception as e:
-                                logger.warning(f"Failed to get image details for {image_id}: {e}")
+                                logger.info(f"Failed to get image details for {image_id}: {e}")
                                 image_name = image_id
 
                     image_date = parse_image_date(image_name) if image_name else None
@@ -246,13 +246,13 @@ class OKEClient:
             # Get compartment for image lookup
             compartment_id = self._get_compartment_from_cluster()
             if not compartment_id:
-                logger.warning("Could not determine compartment ID")
+                logger.info("Could not determine compartment ID")
                 return []
 
             # Get all available images
             available_images = self.get_available_images(compartment_id)
             if not available_images:
-                logger.warning("No available images found")
+                logger.info("No available images found")
                 return []
 
             # Check each node pool
@@ -262,7 +262,7 @@ class OKEClient:
                 # Get base pattern from current image
                 base_pattern = get_image_base_pattern(np.current_image_name)
                 if not base_pattern:
-                    logger.warning(f"Could not parse image pattern from {np.current_image_name}")
+                    logger.info(f"Could not parse image pattern from {np.current_image_name}")
                     continue
 
                 # Find matching images with newer dates

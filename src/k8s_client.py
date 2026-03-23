@@ -219,6 +219,6 @@ class KubernetesClient:
                                 images.add(Image(container.image))
 
             except ApiException as e:
-                logger.warning(f"Failed to get pods in namespace {namespace}: {e}")
+                logger.info(f"Failed to get pods in namespace {namespace}: {e}")
                 span.record_exception(e)
             return images
