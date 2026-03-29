@@ -103,6 +103,8 @@ class OKEClient:
 
         try:
             self.oci_config = oci.config.from_file()
+            if config.oke_region:
+                self.oci_config['region'] = config.oke_region
             self.container_engine_client = oci.container_engine.ContainerEngineClient(self.oci_config)
             self.compute_client = oci.core.ComputeClient(self.oci_config)
             logger.info("OKEClient initialized with OCI SDK")

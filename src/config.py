@@ -35,6 +35,7 @@ class Config:
     # OKE node image check configuration
     oke_image_check_enabled: bool
     oke_cluster_ocid: str
+    oke_region: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -68,4 +69,5 @@ class Config:
             # OKE node image check configuration
             oke_image_check_enabled=os.getenv("OKE_IMAGE_CHECK_ENABLED", "false").lower() == "true",
             oke_cluster_ocid=os.getenv("OKE_CLUSTER_OCID", ""),
+            oke_region=os.getenv("OKE_REGION", ""),
         )
