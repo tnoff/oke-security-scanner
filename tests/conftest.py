@@ -25,6 +25,7 @@ def base_config():
         ocir_extra_repositories=[],
         oke_image_check_enabled=False,
         oke_cluster_ocid="",
+        oke_region="",
     )
 
 
