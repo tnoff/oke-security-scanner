@@ -2,7 +2,7 @@
 kubernetes==35.0.0
 
 # OCI SDK for OCIR integration
-oci==2.168.3
+oci==2.169.0
 
 # OpenTelemetry for observability
 opentelemetry-api
