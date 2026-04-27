@@ -6,7 +6,7 @@ oci==2.172.0
 
 # OpenTelemetry for observability
 opentelemetry-api
-opentelemetry-sdk==1.41.0
+opentelemetry-sdk==1.41.1
 opentelemetry-exporter-otlp
 opentelemetry-instrumentation
 opentelemetry-instrumentation-logging
