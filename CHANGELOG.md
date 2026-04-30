@@ -5,6 +5,22 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.8] - 2026-04-30
+
+### Added
+- `pyproject.toml` replacing `requirements.txt` and `tests/requirements.txt`
+  - Main dependencies under `[project.dependencies]`
+  - Dev/test/lint dependencies under `[project.optional-dependencies].dev`
+- `bandit` security linting added to tox suite (`tox`, `tox -e bandit`)
+- `renovate.json` with pip, Dockerfile, and GitLab CI managers
+  - Dev dependencies automerge on major/minor/patch
+  - Main dependencies automerge on patch only
+- `DEVELOPMENT.md` with local setup instructions and full environment variable reference
+
+### Changed
+- `tox.ini` migrated from `-r requirements.txt` deps to pyproject `extras = dev`
+- `Dockerfile` now installs via `pip install .` instead of `-r requirements.txt`
+
 ## [0.0.7] - 2026-02-17
 
 ### Added

@@ -12,7 +12,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Trivy from GitHub releases
-ARG TRIVY_VERSION=v0.69.2
+ARG TRIVY_VERSION=v0.70.0
 RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh |  sh -s -- -b /usr/local/bin ${TRIVY_VERSION}
 
 # Pre-download Trivy vulnerability database
@@ -21,9 +21,9 @@ RUN trivy image --download-db-only
 # Set up Python environment
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy pyproject and install Python dependencies
+COPY pyproject.toml .
+RUN pip install --no-cache-dir .
 
 # Copy application code
 COPY src/ ./src/

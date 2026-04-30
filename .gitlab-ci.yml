@@ -1,0 +1,186 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+include:
+  - project: 'tnoff-projects/github-workflows'
+    ref: e48cecee88a1b534e38b799a6fcf1eb2e87e0d66
+    file: '/gitlab/tag.yml'
+  - project: 'tnoff-projects/github-workflows'
+    ref: e48cecee88a1b534e38b799a6fcf1eb2e87e0d66
+    file: '/gitlab/discord-notify.yml'
+  - project: 'tnoff-projects/github-workflows'
+    ref: e48cecee88a1b534e38b799a6fcf1eb2e87e0d66
+    file: '/gitlab/renovate.yml'
+
+stages:
+  - validate
+  - test
+  - tag
+  - notify
+  - renovate
+
+docker-build:
+  stage: validate
+  image: docker:27
+  services:
+    - docker:27-dind
+  script:
+    - docker build -t hathor:ci .
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+
+build-docker:
+  stage: tag
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  needs: []
+  before_script:
+    - docker login -u "$OCI_USERNAME" -p "$OCI_TOKEN" "$OCI_REGISTRY"
+    - docker run --privileged --rm tonistiigi/binfmt --install all
+  script:
+    - IMAGE="$OCI_REGISTRY/$OCI_NAMESPACE/$OCI_REPO_NAME"
+    - docker build --platform linux/arm64 -t "$IMAGE:$CI_COMMIT_SHORT_SHA" -t "$IMAGE:latest" .
+    - docker push "$IMAGE:$CI_COMMIT_SHORT_SHA"
+    - docker push "$IMAGE:latest"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+      when: on_success
+
+
+generate-tox:
+  stage: validate
+  image: python:3.14-slim
+  before_script:
+    - pip install tox
+  script:
+    - |
+      python3 - <<'PYEOF'
+      import re, subprocess
+
+      result = subprocess.run(['tox', '-l'], capture_output=True, text=True, check=True)
+      versions = []
+      for env in result.stdout.strip().splitlines():
+          m = re.fullmatch(r'py(\d)(\d+)', env)
+          if m:
+              versions.append(f'{m.group(1)}.{m.group(2)}')
+
+      versions_yaml = '[' + ', '.join(f'"{v}"' for v in versions) + ']'
+      lines = [
+          'stages:',
+          '  - test',
+          '',
+          'tox:',
+          '  stage: test',
+          f'  image: python:${{PYTHON_VERSION}}-slim',
+          '  parallel:',
+          '    matrix:',
+          f'      - PYTHON_VERSION: {versions_yaml}',
+          '  before_script:',
+          '    - apt-get update -qq && apt-get install -y -qq git',
+          '    - pip install tox',
+          '  script:',
+          "    - tox -e $(python3 -c \"import sys; v=sys.version_info; print(f'py{v.major}{v.minor}')\")",
+          '  rules:',
+          '    - when: always',
+      ]
+      with open('tox-pipeline.yml', 'w') as f:
+          f.write('\n'.join(lines) + '\n')
+      print('Generated tox-pipeline.yml:')
+      print('\n'.join(lines))
+      PYEOF
+  artifacts:
+    paths:
+      - tox-pipeline.yml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+
+tox-pipeline:
+  stage: test
+  needs: [generate-tox]
+  trigger:
+    include:
+      - artifact: tox-pipeline.yml
+        job: generate-tox
+    strategy: depend
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+
+diff-cover:
+  stage: test
+  image: python:3.14-slim
+  variables:
+    GIT_DEPTH: 0
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git
+    - pip install .[dev] diff-cover
+  script:
+    - pytest --cov=src/ --cov-report=xml tests/
+    - diff-cover coverage.xml --compare-branch=origin/main --fail-under=100
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+tag-build:
+  extends: .tag
+  stage: tag
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+      when: on_success
+
+notify-mr:
+  extends: .discord-notify
+  stage: notify
+  needs: []
+  variables:
+    NOTIFY_TYPE: mr_opened
+    DISCORD_WEBHOOK_URL: $DISCORD_MR_WEBHOOK
+  rules:
+    # Fork MRs require a project member to manually trigger jobs — prevents untrusted code from running CI automatically
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+
+notify-tag-failure:
+  extends: .discord-notify
+  stage: notify
+  needs: [tag-build, build-docker]
+  variables:
+    NOTIFY_TYPE: failure
+    DISCORD_WEBHOOK_URL: $DISCORD_BUILD_FAILURE_WEBHOOK
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+      when: on_failure
+
+notify-merged:
+  extends: .discord-notify
+  stage: notify
+  needs: []
+  variables:
+    NOTIFY_TYPE: mr_merged
+    DISCORD_WEBHOOK_URL: $DISCORD_MR_WEBHOOK
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+      when: always
+
+renovate:
+  extends: .renovate
+  stage: renovate
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"

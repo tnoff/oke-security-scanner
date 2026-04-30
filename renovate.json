@@ -1,0 +1,32 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "managers": [
+    {
+      "managerFilePatterns": ["pyproject.toml"],
+      "manager": "pep621"
+    },
+    {
+      "managerFilePatterns": ["Dockerfile"],
+      "manager": "dockerfile"
+    },
+    {
+      "managerFilePatterns": [".gitlab-ci.yml"],
+      "manager": "gitlabci"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchManagers": ["pep621"],
+      "matchDepTypes": ["optionalDependencies"],
+      "automerge": true,
+      "matchUpdateTypes": ["major", "minor", "patch"]
+    },
+    {
+      "matchManagers": ["pep621"],
+      "matchDepTypes": ["dependencies"],
+      "automerge": true,
+      "matchUpdateTypes": ["patch"]
+    }
+  ]
+}

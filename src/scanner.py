@@ -6,7 +6,7 @@ from json import JSONDecodeError
 from json import loads as json_loads
 from pathlib import Path
 import shutil
-import subprocess
+import subprocess  # nosec B404
 from typing import Optional
 
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
@@ -122,7 +122,7 @@ class TrivyScanner:
         """Update Trivy vulnerability database."""
         with tracer.start_as_current_span(f'{OTEL_SPAN_PREFIX}.update_db') as span:
             try:
-                subprocess.run(
+                subprocess.run(  # nosec B603 B607
                     ["nice", "-n", "15", "trivy", "image", "--download-db-only"],
                     capture_output=True,
                     text=True,
@@ -163,7 +163,7 @@ class TrivyScanner:
                 if self.cfg.trivy_platform:
                     cmd.extend(["--platform", self.cfg.trivy_platform])
                 cmd.append(image.full_name)
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603 B607
                     cmd,
                     capture_output=True,
                     text=True,

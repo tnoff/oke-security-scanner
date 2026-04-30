@@ -14,14 +14,16 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 
 ## Install and Usage
 
-Install the requirements locally and run
+Install and run locally:
 
 ```
-$ pip install requirements.txt
+$ pip install ".[dev]"
 $ python -m src.main
 ```
 
-Or use the docker build
+See [DEVELOPMENT.md](./DEVELOPMENT.md) for full local setup instructions.
+
+Or use the docker build:
 
 ```
 $ docker build .
@@ -80,9 +82,9 @@ All configuration is provided via Kubernetes secrets as environment variables:
 |----------|----------|---------|-------------|
 | `OTLP_ENDPOINT` | No | `http://localhost:4317` | OTLP collector endpoint |
 | `OTLP_INSECURE` | No | `true` | Use insecure gRPC connection |
-| `OTLP_TRACES_ENABLED` | No | `true` | Enable OTLP trace export |
-| `OTLP_METRICS_ENABLED` | No | `true` | Enable OTLP metrics export |
-| `OTLP_LOGS_ENABLED` | No | `true` | Enable OTLP logs export |
+| `OTLP_TRACES_ENABLED` | No | `false` | Enable OTLP trace export |
+| `OTLP_METRICS_ENABLED` | No | `false` | Enable OTLP metrics export |
+| `OTLP_LOGS_ENABLED` | No | `false` | Enable OTLP logs export |
 | `TRIVY_SEVERITY` | No | `CRITICAL,HIGH` | Vulnerability severities to report |
 | `TRIVY_TIMEOUT` | No | `300` | Scan timeout in seconds |
 | `TRIVY_PLATFORM` | No | (auto) | Target platform for Trivy scans (e.g. `linux/amd64`) |
@@ -94,6 +96,7 @@ All configuration is provided via Kubernetes secrets as environment variables:
 | `OCIR_EXTRA_REPOSITORIES` | No | `''` | Check extra repos for old images to remove |
 | `OKE_IMAGE_CHECK_ENABLED` | No | `false` | Enable OKE node image version checking |
 | `OKE_CLUSTER_OCID` | No | (required if enabled) | OCID of the OKE cluster to check node images for |
+| `OKE_REGION` | No | (required if enabled) | OCI region identifier (e.g. `us-ashburn-1`) |
 
 
 ## Required Permissions
