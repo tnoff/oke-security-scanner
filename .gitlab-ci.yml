@@ -22,7 +22,7 @@ stages:
   - notify
   - renovate
 
-docker-build:
+validate-docker:
   stage: validate
   image: docker:27
   services:
@@ -33,9 +33,8 @@ docker-build:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
       when: manual
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
 
-build-docker:
+docker-push:
   stage: tag
   image: docker:27
   services:
@@ -55,8 +54,7 @@ build-docker:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
       when: on_success
 
-
-generate-tox:
+tox-generate:
   stage: validate
   image: python:3.14-slim
   before_script:
@@ -104,21 +102,19 @@ generate-tox:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
       when: manual
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
 
-tox-pipeline:
+tox-run:
   stage: test
-  needs: [generate-tox]
+  needs: [tox-generate]
   trigger:
     include:
       - artifact: tox-pipeline.yml
-        job: generate-tox
+        job: tox-generate
     strategy: depend
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
       when: manual
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
 
 diff-cover:
   stage: test
@@ -136,14 +132,14 @@ diff-cover:
       when: manual
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
-tag-build:
+release-tag:
   extends: .tag
   stage: tag
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
       when: on_success
 
-notify-mr:
+notify-mr-opened:
   extends: .discord-notify
   stage: notify
   needs: []
@@ -157,10 +153,10 @@ notify-mr:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: always
 
-notify-tag-failure:
+notify-release-failure:
   extends: .discord-notify
   stage: notify
-  needs: [tag-build, build-docker]
+  needs: [release-tag, docker-push]
   variables:
     NOTIFY_TYPE: failure
     DISCORD_WEBHOOK_URL: $DISCORD_BUILD_FAILURE_WEBHOOK
@@ -168,7 +164,7 @@ notify-tag-failure:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
       when: on_failure
 
-notify-merged:
+notify-mr-merged:
   extends: .discord-notify
   stage: notify
   needs: []
