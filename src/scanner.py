@@ -156,6 +156,7 @@ class TrivyScanner:
                     "trivy",
                     "image",
                     "--format", "json",
+                    "--scanners", "vuln",
                     "--severity", self.cfg.trivy_severity,
                     "--timeout", f"{self.cfg.trivy_timeout}s",
                     "--skip-db-update",
