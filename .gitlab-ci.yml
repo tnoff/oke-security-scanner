@@ -1,19 +1,26 @@
 include:
   - project: 'tnoff-projects/github-workflows'
-    ref: e48cecee88a1b534e38b799a6fcf1eb2e87e0d66
+    ref: 554be9a286bd47745d458214ed1f41e52bcbe072
     file: '/gitlab/tag.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: e48cecee88a1b534e38b799a6fcf1eb2e87e0d66
+    ref: 554be9a286bd47745d458214ed1f41e52bcbe072
     file: '/gitlab/discord-notify.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: e48cecee88a1b534e38b799a6fcf1eb2e87e0d66
+    ref: 554be9a286bd47745d458214ed1f41e52bcbe072
     file: '/gitlab/renovate.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: de98748c6a9dc92ded91f5d334563199bf129827
+    ref: 554be9a286bd47745d458214ed1f41e52bcbe072
     file: '/gitlab/trufflehog.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: c03078a2846b049368a6723fa022a0628de34234
+    ref: 554be9a286bd47745d458214ed1f41e52bcbe072
     file: '/gitlab/trufflehog-image.yml'
+  - project: 'tnoff-projects/github-workflows'
+    ref: 554be9a286bd47745d458214ed1f41e52bcbe072
+    file: '/gitlab/bump-version.yml'
+
+default:
+  tags:
+    - self-hosted
 
 stages:
   - validate
@@ -22,13 +29,24 @@ stages:
   - notify
   - renovate
 
+bump-version:
+  extends: .bump-version
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^renovate\/dev-/
+
 validate-docker:
   stage: validate
-  image: docker:27
-  services:
-    - docker:27-dind
+  image: docker.io/moby/buildkit:v0.18.0
   script:
-    - docker build -t hathor:ci .
+    - |
+      buildctl --addr tcp://buildkitd.gitlab-runner.svc.cluster.local:1234 build \
+        --frontend dockerfile.v0 \
+        --local context=. --local dockerfile=. \
+        --output type=docker,name=oke-security-scanner:ci,dest=image.tar
+  artifacts:
+    paths:
+      - image.tar
+    expire_in: 1 day
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
       when: manual
@@ -36,20 +54,31 @@ validate-docker:
 
 docker-push:
   stage: tag
-  image: docker:27
-  services:
-    - docker:27-dind
-  variables:
-    DOCKER_TLS_CERTDIR: "/certs"
+  image: docker.io/moby/buildkit:v0.18.0
   needs: []
+  variables:
+    DOCKER_CONFIG: /tmp/.docker
   before_script:
-    - docker login -u "$OCI_USERNAME" -p "$OCI_TOKEN" "$OCI_REGISTRY"
-    - docker run --privileged --rm tonistiigi/binfmt --install all
+    - mkdir -p "$DOCKER_CONFIG"
+    - |
+      AUTH=$(printf '%s:%s' "$OCI_USERNAME" "$OCI_TOKEN" | base64 | tr -d '\n')
+      cat > "$DOCKER_CONFIG/config.json" <<EOF
+      {"auths":{"$OCI_REGISTRY":{"auth":"$AUTH"}}}
+      EOF
   script:
     - IMAGE="$OCI_REGISTRY/$OCI_NAMESPACE/$OCI_REPO_NAME"
-    - docker build --platform linux/arm64 -t "$IMAGE:$CI_COMMIT_SHORT_SHA" -t "$IMAGE:latest" .
-    - docker push "$IMAGE:$CI_COMMIT_SHORT_SHA"
-    - docker push "$IMAGE:latest"
+    - |
+      buildctl --addr tcp://buildkitd.gitlab-runner.svc.cluster.local:1234 build \
+        --frontend dockerfile.v0 \
+        --local context=. --local dockerfile=. \
+        --opt platform=linux/arm64 \
+        --output type=image,name=$IMAGE:$CI_COMMIT_SHORT_SHA,push=true
+    - |
+      buildctl --addr tcp://buildkitd.gitlab-runner.svc.cluster.local:1234 build \
+        --frontend dockerfile.v0 \
+        --local context=. --local dockerfile=. \
+        --opt platform=linux/arm64 \
+        --output type=image,name=$IMAGE:latest,push=true
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
       when: on_success
@@ -67,6 +96,9 @@ trufflehog:
 trufflehog-image:
   extends: .trufflehog-image
   stage: validate
+  needs: [validate-docker]
+  variables:
+    TRUFFLEHOG_IMAGE_TARBALL: image.tar
   rules:
     # Fork MRs require a project member to manually trigger jobs — prevents untrusted code from running CI automatically
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
@@ -76,7 +108,7 @@ trufflehog-image:
 
 tox-generate:
   stage: validate
-  image: python:3.14-slim
+  image: docker.io/library/python:3.14-slim
   before_script:
     - pip install tox
   script:
@@ -92,13 +124,20 @@ tox-generate:
               versions.append(f'{m.group(1)}.{m.group(2)}')
 
       versions_yaml = '[' + ', '.join(f'"{v}"' for v in versions) + ']'
+      # Pick the highest Python version as the canonical coverage producer for diff-cover.
+      latest = max(versions, key=lambda v: tuple(int(p) for p in v.split('.')))
       lines = [
           'stages:',
           '  - test',
+          '  - coverage',
+          '',
+          'default:',
+          '  tags:',
+          '    - self-hosted',
           '',
           'tox:',
           '  stage: test',
-          f'  image: python:${{PYTHON_VERSION}}-slim',
+          f'  image: docker.io/library/python:${{PYTHON_VERSION}}-slim',
           '  parallel:',
           '    matrix:',
           f'      - PYTHON_VERSION: {versions_yaml}',
@@ -107,6 +146,27 @@ tox-generate:
           '    - pip install tox',
           '  script:',
           "    - tox -e $(python3 -c \"import sys; v=sys.version_info; print(f'py{v.major}{v.minor}')\")",
+          '  artifacts:',
+          '    paths:',
+          '      - coverage.xml',
+          '    expire_in: 1 day',
+          '    when: always',
+          '  rules:',
+          '    - when: always',
+          '',
+          'diff-cover:',
+          '  stage: coverage',
+          f'  image: docker.io/library/python:{latest}-slim',
+          '  needs:',
+          f'    - job: "tox: [{latest}]"',
+          '      artifacts: true',
+          '  variables:',
+          '    GIT_DEPTH: "0"',
+          '  before_script:',
+          '    - apt-get update -qq && apt-get install -y -qq git',
+          '    - pip install diff-cover',
+          '  script:',
+          '    - diff-cover coverage.xml --compare-branch=origin/main --fail-under=100',
           '  rules:',
           '    - when: always',
       ]
@@ -131,22 +191,6 @@ tox-run:
       - artifact: tox-pipeline.yml
         job: tox-generate
     strategy: depend
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
-      when: manual
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-
-diff-cover:
-  stage: test
-  image: python:3.14-slim
-  variables:
-    GIT_DEPTH: 0
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq git
-    - pip install .[dev] diff-cover
-  script:
-    - pytest --cov=src/ --cov-report=xml tests/
-    - diff-cover coverage.xml --compare-branch=origin/main --fail-under=100
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
       when: manual

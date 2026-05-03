@@ -15,18 +15,21 @@
       "manager": "gitlabci"
     }
   ],
+  "rebaseWhen": "behind-base-branch",
   "packageRules": [
     {
       "matchManagers": ["pep621"],
       "matchDepTypes": ["optionalDependencies"],
       "automerge": true,
-      "matchUpdateTypes": ["major", "minor", "patch"]
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "additionalBranchPrefix": "test-"
     },
     {
       "matchManagers": ["pep621"],
       "matchDepTypes": ["dependencies"],
       "automerge": true,
-      "matchUpdateTypes": ["patch"]
+      "matchUpdateTypes": ["patch"],
+      "additionalBranchPrefix": "dev-"
     }
   ]
 }
