@@ -1,34 +1,19 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "managers": [
-    {
-      "managerFilePatterns": ["pyproject.toml"],
-      "manager": "pep621"
-    },
-    {
-      "managerFilePatterns": ["Dockerfile"],
-      "manager": "dockerfile"
-    },
-    {
-      "managerFilePatterns": [".gitlab-ci.yml"],
-      "manager": "gitlabci"
-    }
+  "extends": [
+    "config:recommended"
   ],
+  "enabledManagers": ["gitlabci", "gitlabci-include", "pep621", "dockerfile"],
   "rebaseWhen": "behind-base-branch",
   "packageRules": [
     {
-      "matchManagers": ["pep621"],
-      "matchDepTypes": ["optionalDependencies"],
-      "automerge": true,
-      "matchUpdateTypes": ["major", "minor", "patch"],
-      "additionalBranchPrefix": "test-"
+      "matchPackageNames": ["pytest", "pytest-cov", "pytest-mock", "pytest-asyncio", "tox", "pylint", "bandit"],
+      "additionalBranchPrefix": "test-",
+      "automerge": true
     },
     {
-      "matchManagers": ["pep621"],
-      "matchDepTypes": ["dependencies"],
-      "automerge": true,
-      "matchUpdateTypes": ["patch"],
+      "matchManagers": ["pep621", "dockerfile"],
+      "matchPackageNames": ["!pytest", "!pytest-cov", "!pytest-mock", "!pytest-asyncio", "!tox", "!pylint", "!bandit"],
       "additionalBranchPrefix": "dev-"
     }
   ]
