@@ -10,7 +10,7 @@ dependencies = [
     "kubernetes==35.0.0",
     "oci==2.168.3",
     "opentelemetry-api",
-    "opentelemetry-sdk==1.40.0",
+    "opentelemetry-sdk==1.41.1",
     "opentelemetry-exporter-otlp",
     "opentelemetry-instrumentation",
     "opentelemetry-instrumentation-logging",
