@@ -11,7 +11,6 @@ class Config:
     # OTLP configuration
     otlp_endpoint: str
     otlp_insecure: bool
-    otlp_traces_enabled: bool
     otlp_metrics_enabled: bool
     otlp_logs_enabled: bool
 
@@ -32,11 +31,6 @@ class Config:
     ocir_cleanup_keep_count: int
     ocir_extra_repositories: list[str]
 
-    # OKE node image check configuration
-    oke_image_check_enabled: bool
-    oke_cluster_ocid: str
-    oke_region: str
-
     @classmethod
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
@@ -44,7 +38,6 @@ class Config:
             # OTLP configuration
             otlp_endpoint=os.getenv("OTLP_ENDPOINT", "http://localhost:4317"),
             otlp_insecure=os.getenv("OTLP_INSECURE", "true").lower() == "true",
-            otlp_traces_enabled=os.getenv("OTLP_TRACES_ENABLED", "false").lower() == "true",
             otlp_metrics_enabled=os.getenv("OTLP_METRICS_ENABLED", "false").lower() == "true",
             otlp_logs_enabled=os.getenv("OTLP_LOGS_ENABLED", "false").lower() == "true",
 
@@ -63,11 +56,6 @@ class Config:
             # OCIR cleanup configuration
             ocir_cleanup_enabled=os.getenv("OCIR_CLEANUP_ENABLED", "false").lower() == "true",
             ocir_cleanup_keep_count=int(os.getenv("OCIR_CLEANUP_KEEP_COUNT", "5")),
-            # Comma separated list of extra repos
-            ocir_extra_repositories=os.getenv('OCIR_EXTRA_REPOSITORIES', "").split(','),
-
-            # OKE node image check configuration
-            oke_image_check_enabled=os.getenv("OKE_IMAGE_CHECK_ENABLED", "false").lower() == "true",
-            oke_cluster_ocid=os.getenv("OKE_CLUSTER_OCID", ""),
-            oke_region=os.getenv("OKE_REGION", ""),
+            # Comma separated list of extra repos (filter empties so unset → [])
+            ocir_extra_repositories=[r for r in os.getenv('OCIR_EXTRA_REPOSITORIES', "").split(',') if r],
         )

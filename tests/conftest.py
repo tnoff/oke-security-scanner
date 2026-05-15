@@ -11,7 +11,6 @@ def base_config():
     return Config(
         otlp_endpoint="http://localhost:4318",
         otlp_insecure=True,
-        otlp_traces_enabled=True,
         otlp_metrics_enabled=True,
         otlp_logs_enabled=True,
         trivy_severity="CRITICAL,HIGH",
@@ -23,9 +22,6 @@ def base_config():
         ocir_cleanup_enabled=False,
         ocir_cleanup_keep_count=5,
         ocir_extra_repositories=[],
-        oke_image_check_enabled=False,
-        oke_cluster_ocid="",
-        oke_region="",
     )
 
 

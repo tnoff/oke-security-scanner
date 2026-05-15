@@ -6,10 +6,9 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 
 | Feature | OKE Specific | Description |
 | ------- | ------------ | ----------- |
-| Security Scanner | No | Fetches all images in K8s cluster and runs trivy scanner |
-| Image Update Report | No | Checks for new versions of deployed images |
-| Image Cleanup | Yes | Cleanup OCIR images that do not match semver versioning |
-| OKE Node Image Check | Yes | Reports outdated OKE node/boot images for node pools |
+| Security Scanner | No | Discovers all images in the K8s cluster and scans each with Trivy |
+| OCIR Image Cleanup | Yes | Deletes old OCIR tags beyond a configurable `keep_count`, while protecting the deployed tag, `latest`, and any multi-arch sub-manifest digests referenced by kept tags |
+| Orphan Manifest Cleanup | Yes | Detects and removes `unknown@sha256:...` platform manifests in OCIR whose digest is no longer referenced by any tagged manifest list |
 | Cache Management | No | Automatic cleanup of Trivy image cache after each scan to minimize disk usage |
 
 ## Install and Usage
@@ -17,17 +16,24 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 Install and run locally:
 
 ```
-$ pip install ".[dev]"
+$ pip install .
 $ python -m src.main
 ```
 
-See [DEVELOPMENT.md](./DEVELOPMENT.md) for full local setup instructions.
+See [DEVELOPMENT.md](./DEVELOPMENT.md) for full local setup instructions (including the `[dev]` extras for running tests / linting).
 
 Or use the docker build:
 
 ```
 $ docker build .
 ```
+
+### Running in Kubernetes
+
+The [`k8s/`](./k8s) folder ships example manifests:
+- **`rbac.yaml`** — `ServiceAccount` + read-only `ClusterRole` (pods, namespaces).
+- **`cronjob.yaml`** — daily CronJob that mounts three Secrets: `security-scanner-config` (env-var overrides), `security-scanner-oci-config` (`~/.oci/config` + API key), and `security-scanner-docker-config` (`~/.docker/config.json`).
+- **`secret-example.yaml`** — template for all three Secrets; copy, fill in values, and apply.
 
 ## Authentication
 
@@ -82,7 +88,6 @@ All configuration is provided via Kubernetes secrets as environment variables:
 |----------|----------|---------|-------------|
 | `OTLP_ENDPOINT` | No | `http://localhost:4317` | OTLP collector endpoint |
 | `OTLP_INSECURE` | No | `true` | Use insecure gRPC connection |
-| `OTLP_TRACES_ENABLED` | No | `false` | Enable OTLP trace export |
 | `OTLP_METRICS_ENABLED` | No | `false` | Enable OTLP metrics export |
 | `OTLP_LOGS_ENABLED` | No | `false` | Enable OTLP logs export |
 | `TRIVY_SEVERITY` | No | `CRITICAL,HIGH` | Vulnerability severities to report |
@@ -94,18 +99,14 @@ All configuration is provided via Kubernetes secrets as environment variables:
 | `OCIR_CLEANUP_ENABLED` | No | `false` | Enable automatic deletion of old OCIR commit hash tags |
 | `OCIR_CLEANUP_KEEP_COUNT` | No | `5` | Number of recent commit hash tags to keep per repository |
 | `OCIR_EXTRA_REPOSITORIES` | No | `''` | Check extra repos for old images to remove |
-| `OKE_IMAGE_CHECK_ENABLED` | No | `false` | Enable OKE node image version checking |
-| `OKE_CLUSTER_OCID` | No | (required if enabled) | OCID of the OKE cluster to check node images for |
-| `OKE_REGION` | No | (required if enabled) | OCI region identifier (e.g. `us-ashburn-1`) |
 
 
 ## Required Permissions
 
-To enable OCIR cleanup, the OCI user/principal must have the `manage repos in compartment <name>` permission for each compartment containing OCIR repositories. See the Prerequisites section for full IAM policy details.
-
+To enable OCIR cleanup, the OCI user/principal must have the `manage repos in compartment <name>` permission for each compartment containing OCIR repositories. Read-only operations (listing tags, resolving manifests) only require `inspect repos` / `read repos`.
 
 ## Reporting
 
-Logs enabled to console by default, traces and metrics can also be enabled through OTLP.
+Console logs are enabled by default; logs and metrics can additionally be exported via OTLP (tracing is not wired in).
 
-Discord webhook can also be provded to send a readable report as well.
+Setting `DISCORD_WEBHOOK_URL` enables Discord notifications for the scan report, cleanup recommendations / results, and orphan-manifest deletions.

@@ -97,6 +97,18 @@ class TestTrivyScanner:
         assert detail.installed == "7.68.0"
         assert detail.fixed == "7.68.1"
 
+    def test_add_details_appends_to_existing_cve(self):
+        """ScanResult.add_details appends to an existing CVE entry when the cve_id matches."""
+        image = Image("test.ocir.io/namespace/app:v1.0.0")
+        result = ScanResult(image)
+        result.add_details("CVE-2023-1234", CVEDetails("CRITICAL", "t1", "pkg-a", "1.0", "1.1"))
+        result.add_details("CVE-2023-1234", CVEDetails("CRITICAL", "t2", "pkg-b", "2.0", "2.1"))
+
+        assert len(result.cves) == 1
+        assert result.cves[0].cve_id == "CVE-2023-1234"
+        assert len(result.cves[0].details) == 2
+        assert {d.package for d in result.cves[0].details} == {"pkg-a", "pkg-b"}
+
     def test_parse_vulnerabilities_empty_results(self, scanner):
         """Test _parse_vulnerabilities with empty results."""
         image = Image("test.ocir.io/namespace/app:v1.0.0")

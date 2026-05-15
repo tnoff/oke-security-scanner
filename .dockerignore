@@ -1,0 +1,44 @@
+# Version control
+.git/
+.gitignore
+.gitlab-ci.yml
+.github/
+
+# Python build/cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+
+# Test / lint caches
+.tox/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local-only files
+tests/
+k8s/
+*.md
+LICENSE
+tox.ini
+renovate.json
+Dockerfile
+
+# OS
+.DS_Store
+Thumbs.db

@@ -49,5 +49,8 @@ Thumbs.db
 # Trivy cache
 .trivy/
 
-# Pytest
+# Pytest / coverage
 .coverage
+coverage.xml
+htmlcov/
+.pytest_cache/

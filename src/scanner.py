@@ -10,12 +10,9 @@ import subprocess  # nosec B404
 from typing import Optional
 
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
-from opentelemetry import trace
 
 from .config import Config
 from .k8s_client import Image
-
-OTEL_SPAN_PREFIX = 'scanner'
 
 @dataclass
 class CVEDetails:
@@ -97,7 +94,6 @@ class CompleteScanResult():
         self.scan_results.append(result)
         return True
 
-tracer = trace.get_tracer(__name__)
 logger = getLogger(__name__)
 
 class TrivyScanner:
@@ -120,76 +116,68 @@ class TrivyScanner:
 
     def update_database(self) -> bool:
         """Update Trivy vulnerability database."""
-        with tracer.start_as_current_span(f'{OTEL_SPAN_PREFIX}.update_db') as span:
-            try:
-                subprocess.run(  # nosec B603 B607
-                    ["nice", "-n", "15", "trivy", "image", "--download-db-only"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    check=True,
-                )
+        try:
+            subprocess.run(  # nosec B603 B607
+                ["nice", "-n", "15", "trivy", "image", "--download-db-only"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=True,
+            )
 
-                logger.info("Trivy database updated successfully")
-                self.db_updated = True
-                return True
+            logger.info("Trivy database updated successfully")
+            self.db_updated = True
+            return True
 
-            except subprocess.TimeoutExpired as e:
-                logger.warning("Trivy database update timed out, using cached database")
-                span.record_exception(e)
-                return False
+        except subprocess.TimeoutExpired:
+            logger.warning("Trivy database update timed out, using cached database")
+            return False
 
-            except subprocess.CalledProcessError as e:
-                logger.warning(f"Trivy database update failed, using cached database: {e.stderr}")
-                span.record_exception(e)
-                return False
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Trivy database update failed, using cached database: {e.stderr}")
+            return False
 
     def scan_image(self, image: Image) -> Optional[ScanResult]:
         """Scan a container image for vulnerabilities."""
-        with tracer.start_as_current_span(f'{OTEL_SPAN_PREFIX}.scan_image') as span:
-            span.set_attribute("image.name", image.full_name)
-            logger.info(f'Scanning image {image.full_name}')
-            try:
-                # Run Trivy scan
-                cmd = [
-                    "nice", "-n", "15",
-                    "trivy",
-                    "image",
-                    "--format", "json",
-                    "--scanners", "vuln",
-                    "--severity", self.cfg.trivy_severity,
-                    "--timeout", f"{self.cfg.trivy_timeout}s",
-                    "--skip-db-update",
-                ]
-                if self.cfg.trivy_platform:
-                    cmd.extend(["--platform", self.cfg.trivy_platform])
-                cmd.append(image.full_name)
-                result = subprocess.run(  # nosec B603 B607
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.cfg.trivy_timeout + 30,
-                    check=True,
-                )
-                return self._parse_vulnerabilities(image, json_loads(result.stdout))
+        logger.info(f'Scanning image {image.full_name}')
+        try:
+            # Run Trivy scan
+            cmd = [
+                "nice", "-n", "15",
+                "trivy",
+                "image",
+                "--format", "json",
+                "--scanners", "vuln",
+                "--severity", self.cfg.trivy_severity,
+                "--timeout", f"{self.cfg.trivy_timeout}s",
+                "--skip-db-update",
+            ]
+            if self.cfg.trivy_platform:
+                cmd.extend(["--platform", self.cfg.trivy_platform])
+            cmd.append(image.full_name)
+            result = subprocess.run(  # nosec B603
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.cfg.trivy_timeout + 30,
+                check=True,
+            )
+            return self._parse_vulnerabilities(image, json_loads(result.stdout))
 
-            except subprocess.TimeoutExpired as e:
-                logger.error(f"Image scan timed out: {image.full_name}")
-                span.record_exception(e)
-                return None
+        except subprocess.TimeoutExpired:
+            logger.error(f"Image scan timed out: {image.full_name}")
+            return None
 
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Image scan failed: {image.full_name} - {e.stderr}")
-                span.record_exception(e)
-                return None
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Image scan failed: {image.full_name} - {e.stderr}")
+            return None
 
-            except JSONDecodeError as e:
-                logger.error(f"Failed to parse Trivy output for {image.full_name}: {e}")
-                span.record_exception(e)
-                return None
+        except JSONDecodeError as e:
+            logger.error(f"Failed to parse Trivy output for {image.full_name}: {e}")
+            return None
 
-            finally:
-                self._cleanup_image_cache()
+        finally:
+            self._cleanup_image_cache()
 
     def _parse_vulnerabilities(self, image: Image, json_output: dict) -> Optional[ScanResult]:
         """Parse vulnerability counts and CVE details from Trivy results.

@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timezone
 
-from src.k8s_client import Image, ImageVersion
+from src.k8s_client import Image
 
 
 class TestDiscordNotifier:
@@ -15,8 +15,8 @@ class TestDiscordNotifier:
         """Mock DapperTable to avoid external dependency issues."""
         with patch('src.discord_notifier.DapperTable') as mock:
             mock_instance = MagicMock()
-            mock_instance.print.return_value = ["Test message"]
-            mock_instance.size = 1
+            mock_instance.render.return_value = ["Test message"]
+            mock_instance.__len__.return_value = 1
             mock.return_value = mock_instance
             yield mock
 
@@ -56,45 +56,6 @@ class TestDiscordNotifier:
         assert mock_post.call_count >= 1
 
     @patch('src.discord_notifier.requests.post')
-    def test_send_version_update_info(self, mock_post, notifier, mock_dapper_table):
-        """Test sending version update info."""
-        from src.registry_client import UpdateInfo
-
-        mock_post.return_value = Mock(status_code=200)
-        mock_post.return_value.raise_for_status = Mock()
-
-        # Create ImageVersion via Image parsing
-        current_img = Image("test.ocir.io/namespace/app:v1.0.0")
-        latest_img = Image("test.ocir.io/namespace/app:v2.0.0")
-
-        update_info = [
-            UpdateInfo(
-                registry="test.ocir.io",
-                repo_name="namespace/app",
-                current=current_img.version,
-                latest=latest_img.version,
-            )
-        ]
-
-        notifier.send_version_update_info(update_info)
-
-        assert mock_post.call_count >= 1
-
-    @patch('src.discord_notifier.requests.post')
-    def test_send_version_update_info_empty(self, mock_post, notifier, mock_dapper_table):
-        """Test sending empty version update info."""
-        mock_post.return_value = Mock(status_code=200)
-        mock_post.return_value.raise_for_status = Mock()
-
-        # Set size to 0 to simulate empty table
-        mock_dapper_table.return_value.size = 0
-
-        notifier.send_version_update_info([])
-
-        # Should still send a "no updates" message
-        assert mock_post.call_count >= 1
-
-    @patch('src.discord_notifier.requests.post')
     def test_send_cleanup_recommendations(self, mock_post, notifier, mock_dapper_table):
         """Test sending cleanup recommendations."""
         from src.registry_client import CleanupRecommendation
@@ -126,7 +87,7 @@ class TestDiscordNotifier:
         mock_post.return_value.raise_for_status = Mock()
 
         # Set size to 0 to simulate empty table
-        mock_dapper_table.return_value.size = 0
+        mock_dapper_table.return_value.__len__.return_value = 0
 
         notifier.send_cleanup_recommendations([])
 
@@ -155,7 +116,7 @@ class TestDiscordNotifier:
         mock_post.return_value.raise_for_status = Mock()
 
         # Set size to 0 to simulate empty table
-        mock_dapper_table.return_value.size = 0
+        mock_dapper_table.return_value.__len__.return_value = 0
 
         notifier.send_deletion_results([])
 
@@ -163,63 +124,50 @@ class TestDiscordNotifier:
         assert mock_post.call_count >= 1
 
     @patch('src.discord_notifier.requests.post')
-    def test_send_node_image_report(self, mock_post, notifier, mock_dapper_table):
-        """Test sending node image update report."""
-        from src.oke_client import NodeImageUpdateInfo
+    def test_send_image_scan_report_shortens_dockerhub_failed_image(self, mock_post, notifier, mock_dapper_table):
+        """Failed-scan rows for docker.io images use the short repo name (no 'docker.io/' prefix)."""
+        from src.scanner import CompleteScanResult
 
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
 
-        updates = [
-            NodeImageUpdateInfo(
-                node_pool_name="pool-1",
-                kubernetes_version="v1.28.2",
-                current_image_name="Oracle-Linux-8.10-aarch64-2025.11.20-0",
-                current_image_date=datetime(2025, 11, 20),
-                latest_image_name="Oracle-Linux-8.10-aarch64-2025.12.15-0",
-                latest_image_date=datetime(2025, 12, 15),
-                latest_image_id="ocid1.image.oc1.test",
-            )
-        ]
+        complete = CompleteScanResult()
+        complete.add_result(None, image=Image("docker.io/library/nginx:1.27"))
+        complete.add_result(None, image=Image("iad.ocir.io/ns/app:v1.0.0"))
 
-        notifier.send_node_image_report(updates)
+        notifier.send_image_scan_report(complete)
 
-        assert mock_post.call_count >= 1
+        rows_added = [call.args[0] for call in mock_dapper_table.return_value.add_row.call_args_list]
+        # docker.io image rendered without registry prefix
+        assert ['library/nginx:1.27'] in rows_added
+        # Non-docker.io image keeps its registry prefix
+        assert ['iad.ocir.io/ns/app:v1.0.0'] in rows_added
 
     @patch('src.discord_notifier.requests.post')
-    def test_send_node_image_report_empty(self, mock_post, notifier, mock_dapper_table):
-        """Test sending empty node image report."""
+    def test_send_deletion_results_uses_orphan_prefix(self, mock_post, notifier, mock_dapper_table):
+        """is_orphaned=True selects the orphan-specific message prefix."""
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
 
-        # Set size to 0 to simulate empty table
-        mock_dapper_table.return_value.size = 0
+        notifier.send_deletion_results(
+            [Image("test.ocir.io/ns/app:v1.0.0")],
+            is_orphaned=True,
+        )
 
-        notifier.send_node_image_report([])
-
-        # Should still send an "up to date" message
-        assert mock_post.call_count >= 1
+        prefix_kwargs = [call.kwargs.get('prefix') for call in mock_dapper_table.call_args_list]
+        assert any(p and 'Orphan' in p for p in prefix_kwargs)
 
     @patch('src.discord_notifier.requests.post')
-    def test_send_node_image_report_with_none_dates(self, mock_post, notifier, mock_dapper_table):
-        """Test sending node image report when dates are None."""
-        from src.oke_client import NodeImageUpdateInfo
-
+    def test_send_deletion_results_substitutes_digest_for_unknown_tag(self, mock_post, notifier, mock_dapper_table):
+        """When an image's tag is 'unknown', the row uses its digest instead."""
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
 
-        updates = [
-            NodeImageUpdateInfo(
-                node_pool_name="pool-1",
-                kubernetes_version="v1.28.2",
-                current_image_name="Unknown",
-                current_image_date=None,
-                latest_image_name="Unknown",
-                latest_image_date=None,
-                latest_image_id="ocid1.image.oc1.test",
-            )
-        ]
+        img = Image(
+            "test.ocir.io/ns/app:unknown",
+            digest="sha256:deadbeef",
+        )
+        notifier.send_deletion_results([img])
 
-        notifier.send_node_image_report(updates)
-
-        assert mock_post.call_count >= 1
+        rows_added = [call.args[0] for call in mock_dapper_table.return_value.add_row.call_args_list]
+        assert ['test.ocir.io/ns/app', 'sha256:deadbeef'] in rows_added

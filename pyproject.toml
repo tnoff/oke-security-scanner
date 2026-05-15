@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oke-security-scanner"
-version = "0.0.8"
+version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "kubernetes==35.0.0",
@@ -15,7 +15,7 @@ dependencies = [
     "opentelemetry-instrumentation",
     "opentelemetry-instrumentation-logging",
     "requests",
-    "dappertable @ git+https://github.com/tnoff/dappertable.git@v0.2.4",
+    "dappertable @ https://gitlab.com/tnoff-projects/dappertable/-/archive/v1.1.4/dappertable-v1.1.4.tar",
 ]
 
 [project.optional-dependencies]
@@ -32,3 +32,44 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
+
+[tool.pylint.main]
+jobs = 0
+persistent = true
+recursive = true
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-module-docstring",
+    "missing-function-docstring",
+    "too-many-statements",
+    "too-few-public-methods",
+    "too-many-branches",
+    "too-many-arguments",
+    "too-many-locals",
+    "too-many-positional-arguments",
+    "too-many-instance-attributes",
+    "line-too-long",
+    "logging-fstring-interpolation",
+    "broad-exception-caught",
+    "too-many-return-statements",
+    "protected-access",
+    "too-many-nested-blocks",
+]
+
+[tool.pylint.format]
+max-line-length = 120
+indent-string = "    "
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "ex", "Run", "_", "e", "f", "db", "ns", "cfg"]
+
+[tool.pylint.design]
+max-args = 8
+max-locals = 20
+
+[tool.pylint.similarities]
+min-similarity-lines = 10
+
+[tool.pylint.imports]
+allow-wildcard-with-all = false

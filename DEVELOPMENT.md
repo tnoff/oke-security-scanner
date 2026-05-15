@@ -39,7 +39,6 @@ The scanner is configured entirely via environment variables. All variables are 
 |---|---|---|
 | `OTLP_ENDPOINT` | `http://localhost:4317` | gRPC endpoint for the OTLP collector |
 | `OTLP_INSECURE` | `true` | Disable TLS for the OTLP connection |
-| `OTLP_TRACES_ENABLED` | `false` | Export traces |
 | `OTLP_METRICS_ENABLED` | `false` | Export metrics |
 | `OTLP_LOGS_ENABLED` | `false` | Export logs |
 
@@ -72,19 +71,10 @@ The scanner is configured entirely via environment variables. All variables are 
 | `OCIR_CLEANUP_KEEP_COUNT` | `5` | Number of most-recent tags to keep per repository |
 | `OCIR_EXTRA_REPOSITORIES` | _(empty)_ | Comma-separated extra OCIR repos to include in cleanup |
 
-### OKE node image check
-
-| Variable | Default | Description |
-|---|---|---|
-| `OKE_IMAGE_CHECK_ENABLED` | `false` | Check node pools for available image updates |
-| `OKE_CLUSTER_OCID` | _(empty)_ | OCID of the OKE cluster to inspect |
-| `OKE_REGION` | _(empty)_ | OCI region identifier (e.g. `us-ashburn-1`) |
-
 ## Running locally
 
 ```bash
 export KUBECONFIG=~/.kube/config
-export OKE_REGION=us-ashburn-1
 # set any other variables you need ...
 
 python -m src.main

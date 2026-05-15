@@ -5,6 +5,38 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2026-05-15
+
+This release refocuses the scanner on its two surviving features — **Trivy vulnerability scanning** and **OCIR cleanup** (old tags + orphaned platform manifests) — and removes everything else. It also slims the Docker image, drops OTLP tracing, migrates to the latest `dappertable`, and brings test coverage to 100%.
+
+### Added
+- `.dockerignore` so the build context excludes `venv/`, `.tox/`, `tests/`, `.git/`, coverage artifacts, etc.
+- `.gitattributes` for consistent LF line endings, Python-aware diffs, and `export-ignore` rules so `git archive` / GitLab release tarballs skip CI/dev-only files (`tests/`, `.gitlab-ci.yml`, `AGENTS.md`, etc.).
+- Three-Secret deployment shape (`security-scanner-config`, `security-scanner-oci-config`, `security-scanner-docker-config`) documented in `k8s/secret-example.yaml`.
+
+### Changed
+- `Dockerfile` rewritten as a two-stage build; the final image no longer carries `curl`, `wget`, `tar`, or `git`, and skips the pre-baked Trivy DB (it's downloaded on first run).
+- `dappertable` dependency switched from `git+https://github.com/tnoff/dappertable.git@v0.2.4` to the v1.1.4 tarball from GitLab, removing the build-time `git` requirement.
+- `discord_notifier` migrated to the dappertable 1.1.x API: `Column` / `Columns` replace `DapperTableHeader` / `DapperTableHeaderOptions`, `header_options=` becomes `columns=`, `.print()` becomes `.render()`, and `.size` becomes `len(table)`.
+- `k8s/cronjob.yaml` no longer references the dead `OCI_REGISTRY` / `OCI_USERNAME` / `OCI_TOKEN` / `OCI_NAMESPACE` env vars; the manifest now mounts `~/.oci/config` and `~/.docker/config.json` from dedicated read-only Secrets.
+- Pylint configuration moved from `.pylintrc` into `[tool.pylint.*]` tables in `pyproject.toml`.
+- Dropped the unused `self.apps_v1` attribute from `KubernetesClient`.
+- README rewritten to match the slimmed feature set and the new Kubernetes deployment shape.
+- Test suite expanded to **100% line coverage** across all `src/` modules (previously 85%).
+
+### Fixed
+- `main()` now actually flushes the `MeterProvider` on shutdown (previous code never wired the meter provider into the `finally` block, so metrics were never flushed).
+- `delete_ocir_images` now returns `[]` (matching its `list[Image]` return type) instead of `{}` when the OCI SDK client is unavailable.
+- `OCIR_EXTRA_REPOSITORIES` parsing no longer yields `[""]` when the env var is unset/empty (now correctly an empty list); fixed a latent code path that constructed nonsensical `Image` instances downstream.
+- Removed the duplicate "Trivy database updated successfully" log line in `main()` (the scanner itself already logs it).
+
+### Removed
+- Image update report (`check_image_updates`) and the Docker Hub / registry tag-listing helpers it depended on.
+- OKE node image check (`OKE_IMAGE_CHECK_ENABLED`, `OKE_CLUSTER_OCID`, `OKE_REGION`) and `src/oke_client.py`.
+- `ImageVersion` parsing and `Image.version` / semver comparison from `src/k8s_client.py`.
+- Discord notifications `send_version_update_info` and `send_node_image_report`.
+- OTLP tracing (`OTLP_TRACES_ENABLED` env var, `TracerProvider` / span exporter setup, and every `tracer.start_as_current_span` wrapper across the codebase); logs and metrics are still exported via OTLP.
+
 ## [0.0.11] - 2026-05-13
 
 ### Changed

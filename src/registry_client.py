@@ -4,35 +4,17 @@ import json
 import os
 from logging import getLogger
 from typing import Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 import requests
-from opentelemetry import trace
 import oci
 from oci.regions import REGIONS_SHORT_NAMES
 
 from .config import Config
-from .k8s_client import Image, ImageVersion
+from .k8s_client import Image
 
 logger = getLogger(__name__)
-tracer = trace.get_tracer(__name__)
-
-OTEL_PREFIX = 'registry'
-
-@dataclass
-class UpdateInfo:
-    """Information about an available image update."""
-    registry: str
-    repo_name: str
-    current: ImageVersion
-    latest: ImageVersion
-    is_major_update: bool = field(init=False)
-
-    def __post_init__(self):
-        self.is_major_update = False
-        if self.current.is_semver and self.latest.is_semver:
-            self.is_major_update = self.current.major == self.latest.major
 
 @dataclass
 class CleanupRecommendation:
@@ -185,29 +167,28 @@ class RegistryClient:
         Returns:
             List of compartment OCIDs to search
         """
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_compartments'):
-            if not self.identity_client:
-                return []
+        if not self.identity_client:
+            return []
 
-            tenancy_id = self._get_tenancy_id()
-            if not tenancy_id:
-                return []
+        tenancy_id = self._get_tenancy_id()
+        if not tenancy_id:
+            return []
 
-            compartment_ids = [tenancy_id]  # Start with root tenancy
+        compartment_ids = [tenancy_id]  # Start with root tenancy
 
-            # List all compartments in the tenancy
-            response = self.identity_client.list_compartments(
-                compartment_id=tenancy_id,
-                compartment_id_in_subtree=True,  # Include nested compartments
-                access_level="ACCESSIBLE"  # Only compartments we can access
-            )
+        # List all compartments in the tenancy
+        response = self.identity_client.list_compartments(
+            compartment_id=tenancy_id,
+            compartment_id_in_subtree=True,  # Include nested compartments
+            access_level="ACCESSIBLE"  # Only compartments we can access
+        )
 
-            for compartment in response.data:
-                if compartment.lifecycle_state == "ACTIVE":
-                    compartment_ids.append(compartment.id)
+        for compartment in response.data:
+            if compartment.lifecycle_state == "ACTIVE":
+                compartment_ids.append(compartment.id)
 
-            logger.debug(f"Found {len(compartment_ids)} accessible compartments")
-            return compartment_ids
+        logger.debug(f"Found {len(compartment_ids)} accessible compartments")
+        return compartment_ids
 
 
     def _find_repository_compartment(self, repository: str) -> Optional[str]:
@@ -220,43 +201,42 @@ class RegistryClient:
             Compartment OCID where repository exists, or None if not found
         """
         # Make sure we take the namespace prefix out of the repo name
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.find_repo_compartment'):
-            if repository in self._repository_compartment_cache:
-                logger.debug(f"Using cached compartment for repository {repository}")
-                return self._repository_compartment_cache[repository]
+        if repository in self._repository_compartment_cache:
+            logger.debug(f"Using cached compartment for repository {repository}")
+            return self._repository_compartment_cache[repository]
 
-            if not self.artifacts_client:
-                return None
-
-            # Get all accessible compartments
-            compartments = self._list_all_compartments()
-
-            # Search each compartment for the repository
-            for compartment_id in compartments:
-                try:
-                    response = self.artifacts_client.list_container_images(
-                        compartment_id=compartment_id,
-                        repository_name=repository,
-                        limit=1  # Just check if it exists
-                    )
-
-                    # If we got any results, this compartment has the repository
-                    if response.data.items:
-                        logger.info(f"Found repository {repository} in compartment {compartment_id}")
-                        # Cache the result
-                        self._repository_compartment_cache[repository] = compartment_id
-                        return compartment_id
-
-                except oci.exceptions.ServiceError as e:
-                    # 404 means repository doesn't exist in this compartment, continue searching
-                    if e.status == 404:
-                        continue
-                    # Other errors - log and continue
-                    logger.debug(f"Error checking compartment {compartment_id}: {e.message}")
-                    continue
-
-            logger.info(f"Repository {repository} not found in any accessible compartment")
+        if not self.artifacts_client:
             return None
+
+        # Get all accessible compartments
+        compartments = self._list_all_compartments()
+
+        # Search each compartment for the repository
+        for compartment_id in compartments:
+            try:
+                response = self.artifacts_client.list_container_images(
+                    compartment_id=compartment_id,
+                    repository_name=repository,
+                    limit=1  # Just check if it exists
+                )
+
+                # If we got any results, this compartment has the repository
+                if response.data.items:
+                    logger.info(f"Found repository {repository} in compartment {compartment_id}")
+                    # Cache the result
+                    self._repository_compartment_cache[repository] = compartment_id
+                    return compartment_id
+
+            except oci.exceptions.ServiceError as e:
+                # 404 means repository doesn't exist in this compartment, continue searching
+                if e.status == 404:
+                    continue
+                # Other errors - log and continue
+                logger.debug(f"Error checking compartment {compartment_id}: {e.message}")
+                continue
+
+        logger.info(f"Repository {repository} not found in any accessible compartment")
+        return None
 
     def _get_ocir_images_via_sdk(self, image: Image) -> list[Image]:
         """Get OCIR images using OCI SDK.
@@ -269,50 +249,49 @@ class RegistryClient:
         Returns:
             List of image dictionaries with version and created_at
         """
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_ocir_images'):
-            # Check cache first (use normalized name)
-            if image.repo_name in self._ocir_image_cache:
-                logger.debug(f"Using cached OCIR image data for {image.repo_name}")
-                return self._ocir_image_cache[image.repo_name]
+        # Check cache first (use normalized name)
+        if image.repo_name in self._ocir_image_cache:
+            logger.debug(f"Using cached OCIR image data for {image.repo_name}")
+            return self._ocir_image_cache[image.repo_name]
 
-            if not self.artifacts_client:
-                logger.debug("OCI SDK client not available")
-                return []
+        if not self.artifacts_client:
+            logger.debug("OCI SDK client not available")
+            return []
 
-            # Strip namespace prefix from repository name for OCI API calls
-            repository = self._strip_namespace_prefix(image.repo_name)
+        # Strip namespace prefix from repository name for OCI API calls
+        repository = self._strip_namespace_prefix(image.repo_name)
 
-            # Find which compartment contains this repository
-            compartment_id = self._find_repository_compartment(repository)
-            if not compartment_id:
-                logger.info(f"Could not find compartment for repository {image.repo_name}")
-                return []
-            # List all container images in the repository (with pagination)
-            response = oci.pagination.list_call_get_all_results(
-                self.artifacts_client.list_container_images,
-                compartment_id,
-                repository_name=repository,
-            )
+        # Find which compartment contains this repository
+        compartment_id = self._find_repository_compartment(repository)
+        if not compartment_id:
+            logger.info(f"Could not find compartment for repository {image.repo_name}")
+            return []
+        # List all container images in the repository (with pagination)
+        response = oci.pagination.list_call_get_all_results(
+            self.artifacts_client.list_container_images,
+            compartment_id,
+            repository_name=repository,
+        )
 
-            images = []
-            for item in response.data:
-                # Tagged images have a version; untagged platform manifests don't
-                if item.version:
-                    tag = item.version
-                elif hasattr(item, 'digest') and item.digest:
-                    tag = f'unknown@{item.digest}'
-                else:
-                    continue
-                new_image = Image(f'{image.registry}/{image.repo_name}:{tag}',
-                                ocid=item.id,
-                                created_at=item.time_created,
-                                digest=item.digest)
-                images.append(new_image)
+        images = []
+        for item in response.data:
+            # Tagged images have a version; untagged platform manifests don't
+            if item.version:
+                tag = item.version
+            elif hasattr(item, 'digest') and item.digest:
+                tag = f'unknown@{item.digest}'
+            else:
+                continue
+            new_image = Image(f'{image.registry}/{image.repo_name}:{tag}',
+                            ocid=item.id,
+                            created_at=item.time_created,
+                            digest=item.digest)
+            images.append(new_image)
 
-            # Cache the results
-            self._ocir_image_cache[image.repo_name] = images
-            logger.debug(f"Found {len(images)} OCIR images for {image.repo_name}")
-            return images
+        # Cache the results
+        self._ocir_image_cache[image.repo_name] = images
+        logger.debug(f"Found {len(images)} OCIR images for {image.repo_name}")
+        return images
 
     def _get_docker_auth(self, image: Image) -> Optional[dict]:
         """Get Docker V2 API auth headers for an image.
@@ -434,171 +413,63 @@ class RegistryClient:
         Returns:
             Creation datetime or None
         """
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_image_creation_date'):
-            if image.is_ocir_image:
-                images = self._get_ocir_images_via_sdk(image)
-                for img in images:
-                    if img.tag == image.tag and img.created_at:
-                        logger.debug(f"Using cached creation date for OCIR image {image.repo_name}:{image.tag}")
-                        return img.created_at
-                logger.debug(f"No cached creation date found for OCIR image {image.repo_name}:{image.tag}")
-                return None
+        if image.is_ocir_image:
+            images = self._get_ocir_images_via_sdk(image)
+            for img in images:
+                if img.tag == image.tag and img.created_at:
+                    logger.debug(f"Using cached creation date for OCIR image {image.repo_name}:{image.tag}")
+                    return img.created_at
+            logger.debug(f"No cached creation date found for OCIR image {image.repo_name}:{image.tag}")
             return None
-
-    def _normalize_dockerhub_repo(self, repo_name: str) -> str:
-        """Strip docker.io/ prefix and qualify official images with library/."""
-        if repo_name.startswith("docker.io/"):
-            repo_name = repo_name[len("docker.io/"):]
-        if "/" not in repo_name:
-            repo_name = f"library/{repo_name}"
-        return repo_name
-
-    def get_image_versions(self, image: Image) -> list[Image]:
-        """Fetch all tags for a given image repository.
-
-        Args:
-            registry: Registry hostname
-            repository: Image repository (e.g., 'namespace/discord-bot')
-
-        Returns:
-            List of tag names
-        """
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_image_versions'):
-            # Build URL and headers based on registry type
-            if image.is_ocir_image:
-                # Use OCI SDK for OCIR, excluding 'latest' and platform manifests
-                images = [im for im in self._get_ocir_images_via_sdk(image)
-                          if im.tag != 'latest' and 'unknown@' not in im.full_name]
-                if images:
-                    return images
-                logger.info(f"No images found for OCIR repository: {image.repo_name}")
-                return []
-
-            if image.registry == "docker.io":
-                # Docker Hub API v2
-                repo = self._normalize_dockerhub_repo(image.repo_name)
-                url = f"https://hub.docker.com/v2/repositories/{repo}/tags?page_size=200"
-                response = requests.get(url, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-                tags = [result["name"] for result in data.get("results", []) if result["name"] != 'latest']
-                return [Image(f'{repo}:{tag}') for tag in tags]
-
-            url = f"https://{image.registry}/v2/{image.repo_name}/tags/list"
-            headers = {}
-            logger.debug(f"Fetching tags for {image.repo_name} from {image.registry}")
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-
-            data = response.json()
-            tags = data.get("tags", [])
-            return [Image(f'{image.registry}/{image.repo_name}:{tag}') for tag in tags if tag != 'latest']
-
-
-    def get_latest_version(self, image_versions: list[Image]) -> Image:
-        """Get the latest version from a list of tags"""
-        # Assume Image class will sort correctly
-        image_versions.sort(key=lambda image: image)
-        return image_versions[-1]
-
-    def filter_non_semvers(self, image_list: list[Image]) -> list[Image]:
-        '''Filter non semver images from result'''
-        result = []
-        for image in image_list:
-            if not image.version.is_semver:
-                continue
-            result.append(image)
-        return result
-
-    def check_image_updates(self, images: list[Image]) -> list[UpdateInfo]:
-        '''
-        Check for newer versions of image
-
-        image: K8s Client Image object
-        '''
-        update_info_list = []
-        repo_names_processed = []
-        for image in images:
-            # Make sure we dont check any dupes
-            if f'{image.registry}/{image.repo_name}' in repo_names_processed:
-                continue
-            repo_names_processed.append(f'{image.registry}/{image.repo_name}')
-            with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_image_update') as span:
-                logger.info(f'Checking for updates on image {image.full_name}')
-                span.set_attribute('image', image.full_name)
-                if image.tag == 'latest':
-                    logger.debug(f"Skipping version check for {image} (latest tag)")
-                    continue
-                if image.is_ocir_image and image.version.is_githash and not image.created_at:
-                    image.created_at = self.get_image_creation_date(image)
-                try:
-                    available_tags = self.get_image_versions(image)
-                except requests.exceptions.HTTPError as e:
-                    logger.info(f"Could not fetch tags for {image}: {e}")
-                    continue
-
-                # Filter non server images when original is a semver
-                if image.version.is_semver:
-                    available_tags = self.filter_non_semvers(available_tags)
-                if not available_tags:
-                    logger.info(f'Unable to find new tags for image {image.full_name}')
-                    continue
-                newest_version = self.get_latest_version(available_tags)
-                if image.version != newest_version.version:
-                    if image.version.is_semver and not image.version < newest_version.version:
-                        continue
-                    logger.info(f'Existing image {image.full_name} has newever version available {newest_version.full_name}')
-                    update_info_list.append(UpdateInfo(image.registry, image.repo_name, image.version, newest_version.version))
-        return update_info_list
+        return None
 
     def get_old_ocir_images(self, images: list[Image], keep_count: int = 5,
                        extra_repositories: list[str] = None) -> list[CleanupRecommendation]:
         '''Return report of images that can be deleted'''
         repo_names_processed = []
         extra_repositories = extra_repositories or []
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_old_ocir_images'):
-            recommendations = []
-            for extra_repo in extra_repositories:
-                logger.info(f'Scanning extra repo {extra_repo} in old image scan')
-                images.add(Image(f'{self.oci_registry}/{extra_repo}:latest'))
-            for image in images:
-                if f'{image.registry}/{image.repo_name}' in repo_names_processed:
-                    continue
-                logger.info(f'Scanning for versions of {image} that can be deleted')
-                if not image.is_ocir_image:
-                    continue
-                all_images = self._get_ocir_images_via_sdk(image)
-                # Exclude platform manifests - they are handled by get_orphaned_manifests()
-                normal_images = [im for im in all_images if 'unknown@sha256:' not in im.full_name]
-                # Skip the 'latest' tag and the currently deployed image
-                filtered_images = [im for im in normal_images if im.tag != 'latest' and im.full_name != image.full_name]
-                # Then sort so we can check against the keep count
-                filtered_images.sort(key=lambda im: im.created_at)
-                if len(filtered_images) <= keep_count:
-                    continue
-                # Determine kept images (deployed + newest keep_count)
-                # Find the deployed image from all_images to get its digest
-                deployed_with_digest = next((im for im in all_images if im.full_name == image.full_name), image)
-                kept_images = [deployed_with_digest] + filtered_images[len(filtered_images) - keep_count:]
-                # Collect sub-manifest digests from kept images that are manifest lists
-                protected_digests = set()
-                for kept in kept_images:
-                    protected_digests.update(self._get_manifest_list_sub_digests(kept))
-                filtered_images = filtered_images[0:len(filtered_images) - keep_count]
-                # Remove images whose digest is referenced by a kept manifest list
-                if protected_digests:
-                    before_count = len(filtered_images)
-                    filtered_images = [im for im in filtered_images
-                                       if not im.digest or im.digest not in protected_digests]
-                    protected_count = before_count - len(filtered_images)
-                    if protected_count:
-                        logger.info(f'Protected {protected_count} sub-manifest images from deletion in {image.repo_name}')
-                if not filtered_images:
-                    continue
-                recommendations.append(CleanupRecommendation(image.registry, image.repo_name, filtered_images))
-                repo_names_processed.append(f'{image.registry}/{image.repo_name}')
+        recommendations = []
+        for extra_repo in extra_repositories:
+            logger.info(f'Scanning extra repo {extra_repo} in old image scan')
+            images.add(Image(f'{self.oci_registry}/{extra_repo}:latest'))
+        for image in images:
+            if f'{image.registry}/{image.repo_name}' in repo_names_processed:
+                continue
+            logger.info(f'Scanning for versions of {image} that can be deleted')
+            if not image.is_ocir_image:
+                continue
+            all_images = self._get_ocir_images_via_sdk(image)
+            # Exclude platform manifests - they are handled by get_orphaned_manifests()
+            normal_images = [im for im in all_images if 'unknown@sha256:' not in im.full_name]
+            # Skip the 'latest' tag and the currently deployed image
+            filtered_images = [im for im in normal_images if im.tag != 'latest' and im.full_name != image.full_name]
+            # Then sort so we can check against the keep count
+            filtered_images.sort(key=lambda im: im.created_at)
+            if len(filtered_images) <= keep_count:
+                continue
+            # Determine kept images (deployed + newest keep_count)
+            # Find the deployed image from all_images to get its digest
+            deployed_with_digest = next((im for im in all_images if im.full_name == image.full_name), image)
+            kept_images = [deployed_with_digest] + filtered_images[len(filtered_images) - keep_count:]
+            # Collect sub-manifest digests from kept images that are manifest lists
+            protected_digests = set()
+            for kept in kept_images:
+                protected_digests.update(self._get_manifest_list_sub_digests(kept))
+            filtered_images = filtered_images[0:len(filtered_images) - keep_count]
+            # Remove images whose digest is referenced by a kept manifest list
+            if protected_digests:
+                before_count = len(filtered_images)
+                filtered_images = [im for im in filtered_images
+                                   if not im.digest or im.digest not in protected_digests]
+                protected_count = before_count - len(filtered_images)
+                if protected_count:
+                    logger.info(f'Protected {protected_count} sub-manifest images from deletion in {image.repo_name}')
+            if not filtered_images:
+                continue
+            recommendations.append(CleanupRecommendation(image.registry, image.repo_name, filtered_images))
+            repo_names_processed.append(f'{image.registry}/{image.repo_name}')
 
-            return recommendations
+        return recommendations
 
     def get_orphaned_manifests(self, images: list[Image],
                                extra_repositories: list[str] = None) -> list[CleanupRecommendation]:
@@ -619,56 +490,55 @@ class RegistryClient:
         """
         repo_names_processed = []
         extra_repositories = extra_repositories or []
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.get_orphaned_manifests'):
-            recommendations = []
-            for extra_repo in extra_repositories:
-                logger.info(f'Scanning extra repo {extra_repo} for orphaned manifests')
-                images.add(Image(f'{self.oci_registry}/{extra_repo}:latest'))
-            for image in images:
-                if f'{image.registry}/{image.repo_name}' in repo_names_processed:
-                    continue
-                if not image.is_ocir_image:
-                    continue
-                logger.info(f'Scanning {image.repo_name} for orphaned platform manifests')
-                all_images = self._get_ocir_images_via_sdk(image)
+        recommendations = []
+        for extra_repo in extra_repositories:
+            logger.info(f'Scanning extra repo {extra_repo} for orphaned manifests')
+            images.add(Image(f'{self.oci_registry}/{extra_repo}:latest'))
+        for image in images:
+            if f'{image.registry}/{image.repo_name}' in repo_names_processed:
+                continue
+            if not image.is_ocir_image:
+                continue
+            logger.info(f'Scanning {image.repo_name} for orphaned platform manifests')
+            all_images = self._get_ocir_images_via_sdk(image)
 
-                # Separate normal tags from platform manifests
-                # Note: Image.__post_init__ strips @sha256: from the tag, so check full_name
-                normal_tags = [im for im in all_images if 'unknown@sha256:' not in im.full_name]
-                platform_manifests = [im for im in all_images if 'unknown@sha256:' in im.full_name]
+            # Separate normal tags from platform manifests
+            # Note: Image.__post_init__ strips @sha256: from the tag, so check full_name
+            normal_tags = [im for im in all_images if 'unknown@sha256:' not in im.full_name]
+            platform_manifests = [im for im in all_images if 'unknown@sha256:' in im.full_name]
 
-                if not platform_manifests:
-                    repo_names_processed.append(f'{image.registry}/{image.repo_name}')
-                    continue
-
-                # Collect all sub-manifest digests referenced by normal tags
-                # This is the reliable way to determine which platform manifests are still needed,
-                # rather than timestamp matching which can fail when push times differ slightly
-                referenced_digests = set()
-                for tag in normal_tags:
-                    sub_digests = self._get_manifest_list_sub_digests(tag)
-                    referenced_digests.update(sub_digests)
-
-                if not referenced_digests:
-                    # Could not resolve any manifest lists - skip to avoid deleting needed manifests
-                    logger.info(f'Could not resolve manifest lists for {image.repo_name}, '
-                                f'skipping orphan detection')
-                    repo_names_processed.append(f'{image.registry}/{image.repo_name}')
-                    continue
-
-                # Orphans are platform manifests whose digest is not referenced by any normal tag
-                orphans = [im for im in platform_manifests
-                           if im.digest and im.digest not in referenced_digests]
-
-                if orphans:
-                    logger.info(f'Found {len(orphans)} orphaned manifests in {image.repo_name} '
-                                f'(out of {len(platform_manifests)} platform manifests)')
-                    recommendations.append(CleanupRecommendation(
-                        image.registry, image.repo_name, orphans))
-
+            if not platform_manifests:
                 repo_names_processed.append(f'{image.registry}/{image.repo_name}')
+                continue
 
-            return recommendations
+            # Collect all sub-manifest digests referenced by normal tags
+            # This is the reliable way to determine which platform manifests are still needed,
+            # rather than timestamp matching which can fail when push times differ slightly
+            referenced_digests = set()
+            for tag in normal_tags:
+                sub_digests = self._get_manifest_list_sub_digests(tag)
+                referenced_digests.update(sub_digests)
+
+            if not referenced_digests:
+                # Could not resolve any manifest lists - skip to avoid deleting needed manifests
+                logger.info(f'Could not resolve manifest lists for {image.repo_name}, '
+                            f'skipping orphan detection')
+                repo_names_processed.append(f'{image.registry}/{image.repo_name}')
+                continue
+
+            # Orphans are platform manifests whose digest is not referenced by any normal tag
+            orphans = [im for im in platform_manifests
+                       if im.digest and im.digest not in referenced_digests]
+
+            if orphans:
+                logger.info(f'Found {len(orphans)} orphaned manifests in {image.repo_name} '
+                            f'(out of {len(platform_manifests)} platform manifests)')
+                recommendations.append(CleanupRecommendation(
+                    image.registry, image.repo_name, orphans))
+
+            repo_names_processed.append(f'{image.registry}/{image.repo_name}')
+
+        return recommendations
 
     def delete_ocir_images(self, cleanup_recommendations: list[CleanupRecommendation]) -> list[Image]:
         """Delete old OCIR images based on cleanup recommendations.
@@ -679,28 +549,27 @@ class RegistryClient:
         Returns:
             Dictionary mapping repository names to DeletionResult dataclasses
         """
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.delete_old_images'):
-            if not self.artifacts_client:
-                logger.info("OCI SDK not available, cannot delete OCIR images")
-                return {}
+        if not self.artifacts_client:
+            logger.info("OCI SDK not available, cannot delete OCIR images")
+            return []
 
-            images_deleted = []
-            repos_modified = set()
+        images_deleted = []
+        repos_modified = set()
 
-            for item in cleanup_recommendations:
-                for image in item.tags_to_delete:
-                    try:
-                        self.artifacts_client.delete_container_image(image.ocid)
-                    except oci.exceptions.ServiceError as e:
-                        if e.status == 404:
-                            logger.debug(f'Image {image.ocid} already deleted, skipping')
-                        else:
-                            raise
-                    images_deleted.append(image)
-                    repos_modified.add(image.repo_name)
+        for item in cleanup_recommendations:
+            for image in item.tags_to_delete:
+                try:
+                    self.artifacts_client.delete_container_image(image.ocid)
+                except oci.exceptions.ServiceError as e:
+                    if e.status == 404:
+                        logger.debug(f'Image {image.ocid} already deleted, skipping')
+                    else:
+                        raise
+                images_deleted.append(image)
+                repos_modified.add(image.repo_name)
 
-            # Invalidate cache for modified repos so subsequent calls get fresh data
-            for repo in repos_modified:
-                self._ocir_image_cache.pop(repo, None)
+        # Invalidate cache for modified repos so subsequent calls get fresh data
+        for repo in repos_modified:
+            self._ocir_image_cache.pop(repo, None)
 
-            return images_deleted
+        return images_deleted

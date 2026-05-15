@@ -5,7 +5,8 @@ import pytest
 import requests
 from unittest.mock import Mock, patch, mock_open
 from datetime import datetime, timezone, timedelta
-from src.registry_client import RegistryClient, UpdateInfo, CleanupRecommendation
+from oci.exceptions import ServiceError
+from src.registry_client import RegistryClient, CleanupRecommendation
 from src.k8s_client import Image
 
 
@@ -370,196 +371,6 @@ class TestRegistryClient:
         images = client._get_ocir_images_via_sdk(image)
 
         assert images == []
-
-    @patch('src.registry_client.oci')
-    def test_check_image_updates_skips_latest(self, mock_oci, config):
-        """Test check_image_updates skips 'latest' tag."""
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
-
-        client = RegistryClient(config)
-        image = Image('test.ocir.io/testnamespace/myapp:latest')
-
-        result = client.check_image_updates([image])
-
-        assert len(result) == 0
-
-    @patch('src.registry_client.oci')
-    def test_check_image_updates_returns_update_info(self, mock_oci, config):
-        """Test check_image_updates returns UpdateInfo when update available."""
-        mock_config = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.config.from_file.return_value = mock_config
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-
-        mock_object_client = Mock()
-        mock_response = Mock()
-        mock_response.data = 'testnamespace'
-        mock_object_client.get_namespace.return_value = mock_response
-        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
-
-        client = RegistryClient(config)
-        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
-
-        # Set up cached images with older and newer versions
-        old_image = Image('test.ocir.io/testnamespace/myapp:v1.0.0')
-        new_image = Image('test.ocir.io/testnamespace/myapp:v2.0.0')
-        client._ocir_image_cache['testnamespace/myapp'] = [old_image, new_image]
-
-        image = Image('test.ocir.io/testnamespace/myapp:v1.0.0')
-        result = client.check_image_updates([image])
-
-        assert result is not None
-        assert isinstance(result[0], UpdateInfo)
-        assert str(result[0].current) == '1.0.0'
-        assert str(result[0].latest) == '2.0.0'
-
-    @patch('src.registry_client.oci')
-    def test_normalize_dockerhub_repo_strips_prefix(self, mock_oci, config):
-        """Test _normalize_dockerhub_repo strips docker.io/ and adds library/ for official images."""
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
-        client = RegistryClient(config)
-
-        assert client._normalize_dockerhub_repo("docker.io/redis") == "library/redis"
-        assert client._normalize_dockerhub_repo("redis") == "library/redis"
-        assert client._normalize_dockerhub_repo("docker.io/grafana/grafana") == "grafana/grafana"
-        assert client._normalize_dockerhub_repo("grafana/grafana") == "grafana/grafana"
-
-    @patch('src.registry_client.requests.get')
-    @patch('src.registry_client.oci')
-    def test_get_image_versions_dockerhub_strips_prefix(self, mock_oci, mock_get, config):
-        """Test get_image_versions strips docker.io/ prefix when calling Docker Hub API."""
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
-
-        mock_response = Mock()
-        mock_response.json.return_value = {"results": [{"name": "7.4.2"}, {"name": "7.4.1"}]}
-        mock_get.return_value = mock_response
-
-        client = RegistryClient(config)
-        image = Image("docker.io/redis:7.4.2")
-        result = client.get_image_versions(image)
-
-        called_url = mock_get.call_args[0][0]
-        assert "docker.io" not in called_url
-        assert "library/redis" in called_url
-
-    @patch('src.registry_client.requests.get')
-    @patch('src.registry_client.oci')
-    def test_check_image_updates_handles_http_error(self, mock_oci, mock_get, config):
-        """Test check_image_updates logs warning and continues on HTTPError."""
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
-
-        mock_response = Mock()
-        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
-        mock_get.return_value = mock_response
-
-        client = RegistryClient(config)
-        image = Image("docker.io/redis:7.4.2")
-        result = client.check_image_updates([image])
-
-        assert result == []
-
-    @patch('src.registry_client.requests.get')
-    @patch('src.registry_client.oci')
-    def test_get_image_versions_dockerhub_excludes_latest_tag(self, mock_oci, mock_get, config):
-        """Test get_image_versions filters out the 'latest' tag from Docker Hub results."""
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
-
-        mock_response = Mock()
-        mock_response.json.return_value = {"results": [{"name": "7.4.2"}, {"name": "latest"}]}
-        mock_get.return_value = mock_response
-
-        client = RegistryClient(config)
-        image = Image("docker.io/redis:7.4.2")
-        result = client.get_image_versions(image)
-
-        tags = [img.tag for img in result]
-        assert "latest" not in tags
-        assert "7.4.2" in tags
-
-    @patch('src.registry_client.requests.get')
-    @patch('src.registry_client.oci')
-    def test_get_image_versions_dockerhub_returns_normalized_image_names(self, mock_oci, mock_get, config):
-        """Test get_image_versions returns Image objects without the docker.io/ prefix."""
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
-
-        mock_response = Mock()
-        mock_response.json.return_value = {"results": [{"name": "7.4.2"}]}
-        mock_get.return_value = mock_response
-
-        client = RegistryClient(config)
-        image = Image("docker.io/redis:7.4.2")
-        result = client.get_image_versions(image)
-
-        assert len(result) == 1
-        assert "docker.io" not in result[0].full_name
-        assert result[0].full_name == "library/redis:7.4.2"
-
-    @patch('src.registry_client.requests.get')
-    @patch('src.registry_client.oci')
-    def test_get_image_versions_dockerhub_org_image_no_library_prefix(self, mock_oci, mock_get, config):
-        """Test get_image_versions does not add library/ prefix for org-namespaced images."""
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
-
-        mock_response = Mock()
-        mock_response.json.return_value = {"results": [{"name": "10.0.0"}]}
-        mock_get.return_value = mock_response
-
-        client = RegistryClient(config)
-        image = Image("grafana/grafana:10.0.0")
-        result = client.get_image_versions(image)
-
-        called_url = mock_get.call_args[0][0]
-        assert "library" not in called_url
-        assert "grafana/grafana" in called_url
-        assert len(result) == 1
-        assert result[0].full_name == "grafana/grafana:10.0.0"
-
-    @patch('src.registry_client.requests.get')
-    @patch('src.registry_client.oci')
-    def test_check_image_updates_continues_after_http_error(self, mock_oci, mock_get, config):
-        """Test check_image_updates returns results for successful images after one fails with HTTPError."""
-        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
-        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
-        mock_oci.identity.IdentityClient.return_value = Mock()
-        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
-
-        error_response = Mock()
-        error_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
-
-        ok_response = Mock()
-        ok_response.raise_for_status.return_value = None
-        ok_response.json.return_value = {"results": [{"name": "7.4.3"}, {"name": "7.4.2"}]}
-
-        mock_get.side_effect = [error_response, ok_response]
-
-        client = RegistryClient(config)
-        failing_image = Image("docker.io/redis:7.4.2")
-        ok_image = Image("grafana/grafana:7.4.2")
-        result = client.check_image_updates([failing_image, ok_image])
-
-        assert len(result) == 1
-        assert result[0].repo_name == "grafana/grafana"
 
     @patch('src.registry_client.oci')
     def test_get_old_ocir_images_returns_cleanup_recommendations(self, mock_oci, config):
@@ -999,7 +810,7 @@ class TestRegistryClient:
 
         result = client.delete_ocir_images(recommendations)
 
-        assert result == {}
+        assert result == []
 
     @patch('src.registry_client.requests.get')
     @patch('builtins.open', new_callable=mock_open,
@@ -1484,3 +1295,410 @@ class TestRegistryClient:
         for kept_tag in ['deployed', 'tag2', 'tag3', 'tag4', 'tag5', 'tag6']:
             assert f'sha256:{kept_tag}_amd64' not in orphan_digests
             assert f'sha256:{kept_tag}_arm64' not in orphan_digests
+
+
+class TestRegistryClientCoverage:
+    """Targeted tests filling in the remaining coverage gaps."""
+
+    @pytest.fixture
+    def config(self, base_config):
+        return base_config
+
+    def _make_client(self, mock_oci, *, with_namespace=True):
+        """Build a RegistryClient with the common happy-path mocks."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_object_client = Mock()
+        if with_namespace:
+            mock_response = Mock()
+            mock_response.data = 'testnamespace'
+            mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+        return mock_object_client
+
+    # --- oci_namespace / oci_registry error paths ---
+
+    @patch('src.registry_client.oci')
+    def test_oci_namespace_returns_none_when_object_storage_raises(self, mock_oci, config):
+        """oci_namespace returns None and logs when get_namespace() raises."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_object_client = Mock()
+        mock_object_client.get_namespace.side_effect = Exception("API down")
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        assert client.oci_namespace is None
+
+    @patch('src.registry_client.REGIONS_SHORT_NAMES', {'iad': 'us-ashburn-1'})
+    @patch('src.registry_client.oci')
+    def test_oci_registry_returns_none_when_region_not_found(self, mock_oci, config):
+        """oci_registry returns None when the configured region has no short-name mapping."""
+        mock_oci.config.from_file.return_value = {
+            'tenancy': 'ocid1.tenancy.test',
+            'region': 'mars-central-1',  # not in REGIONS_SHORT_NAMES
+        }
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+        assert client.oci_registry is None
+
+    @patch('src.registry_client.oci')
+    def test_oci_registry_returns_none_when_region_lookup_raises(self, mock_oci, config):
+        """oci_registry returns None when something unexpected raises during region lookup."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test', 'region': 'us-ashburn-1'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+
+        client = RegistryClient(config)
+        # Sabotage the config dict so .get('region') raises; clear any cached value
+        broken = Mock()
+        broken.get.side_effect = RuntimeError("boom")
+        client.oci_config = broken
+        client._oci_registry = None
+        assert client.oci_registry is None
+
+    # --- _list_all_compartments early-return paths ---
+
+    @patch('src.registry_client.oci')
+    def test_list_all_compartments_returns_empty_without_identity_client(self, mock_oci, config):
+        mock_oci.config.from_file.side_effect = Exception("no config")
+        client = RegistryClient(config)
+        assert client._list_all_compartments() == []
+
+    @patch('src.registry_client.oci')
+    def test_list_all_compartments_returns_empty_without_tenancy_id(self, mock_oci, config):
+        mock_oci.config.from_file.return_value = {}  # no 'tenancy' key
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_oci.object_storage.ObjectStorageClient.return_value = Mock()
+        client = RegistryClient(config)
+        assert client._list_all_compartments() == []
+
+    # --- _find_repository_compartment search paths ---
+
+    @patch('src.registry_client.oci')
+    def test_find_repository_compartment_returns_none_without_artifacts_client(self, mock_oci, config):
+        mock_oci.config.from_file.side_effect = Exception("no config")
+        client = RegistryClient(config)
+        assert client._find_repository_compartment('repo') is None
+
+    @patch('src.registry_client.oci')
+    def test_find_repository_compartment_finds_repo_after_404s(self, mock_oci, config):
+        """_find_repository_compartment skips 404 errors and finds the repo in a later compartment."""
+        mock_oci.exceptions.ServiceError = ServiceError
+        self._make_client(mock_oci)
+
+        client = RegistryClient(config)
+        # Two compartments: tenancy root + one more
+        compartment_response = Mock()
+        comp = Mock()
+        comp.id = 'ocid1.compartment.apps'
+        comp.lifecycle_state = 'ACTIVE'
+        compartment_response.data = [comp]
+        client.identity_client.list_compartments.return_value = compartment_response
+
+        # First compartment 404s, second has the repo, third would be a non-404 error
+        # (but we won't reach it since second hits)
+        not_found = ServiceError(status=404, code='NF', headers={}, message='not found')
+        hit_response = Mock()
+        hit_response.data.items = [Mock()]  # truthy
+        client.artifacts_client.list_container_images.side_effect = [not_found, hit_response]
+
+        compartment_id = client._find_repository_compartment('repo')
+
+        assert compartment_id == 'ocid1.compartment.apps'
+        # Second call to find_repo for same repo hits the cache (no new API call)
+        assert client._find_repository_compartment('repo') == 'ocid1.compartment.apps'
+
+    @patch('src.registry_client.oci')
+    def test_find_repository_compartment_logs_other_service_errors_and_continues(self, mock_oci, config):
+        """Non-404 ServiceError is logged and the search continues."""
+        mock_oci.exceptions.ServiceError = ServiceError
+        self._make_client(mock_oci)
+
+        client = RegistryClient(config)
+        client.identity_client.list_compartments.return_value = Mock(data=[])
+        # Only the tenancy compartment is searched; non-404 error -> continues -> not found
+        client.artifacts_client.list_container_images.side_effect = ServiceError(
+            status=500, code='X', headers={}, message='boom'
+        )
+        assert client._find_repository_compartment('repo') is None
+
+    # --- _get_ocir_images_via_sdk edge cases ---
+
+    @patch('src.registry_client.oci')
+    def test_get_ocir_images_via_sdk_returns_empty_when_compartment_not_found(self, mock_oci, config):
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        # Force compartment-not-found by short-circuiting the cache to nothing
+        # and making compartment search return None
+        with patch.object(client, '_find_repository_compartment', return_value=None):
+            result = client._get_ocir_images_via_sdk(Image('iad.ocir.io/ns/app:v1'))
+        assert result == []
+
+    @patch('src.registry_client.oci')
+    def test_get_ocir_images_via_sdk_skips_items_with_no_version_and_no_digest(self, mock_oci, config):
+        """Items missing both version and digest are skipped (rare but defended)."""
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        # repo_name is 'ns/app' and doesn't start with 'testnamespace/', so _strip_namespace_prefix
+        # returns 'ns/app' unchanged — that's what the compartment cache key must be.
+        client._repository_compartment_cache['ns/app'] = 'ocid1.compartment.apps'
+
+        # Two items: one with neither version nor digest (skip), one usable
+        ghost = Mock(spec=['version', 'time_created', 'id'])
+        ghost.version = None
+        ghost.time_created = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ghost.id = 'ocid1.image.ghost'
+        # `hasattr(item, 'digest')` must be False for the skip branch — spec excludes digest
+
+        usable = Mock()
+        usable.version = 'v1.0.0'
+        usable.time_created = datetime(2024, 2, 1, tzinfo=timezone.utc)
+        usable.id = 'ocid1.image.usable'
+        usable.digest = 'sha256:abc'
+
+        list_response = Mock()
+        list_response.data = [ghost, usable]
+        mock_oci.pagination.list_call_get_all_results.return_value = list_response
+
+        result = client._get_ocir_images_via_sdk(Image('iad.ocir.io/ns/app:v1.0.0'))
+        # The ghost was skipped; only usable remains
+        assert len(result) == 1
+        assert result[0].tag == 'v1.0.0'
+
+    # --- _get_docker_auth / _get_manifest_list_sub_digests ---
+
+    @patch('src.registry_client.requests.get')
+    @patch('builtins.open', new_callable=mock_open,
+           read_data=json.dumps({'auths': {'iad.ocir.io': {'auth': 'dXNlcjpwYXNz'}}}))
+    @patch('src.registry_client.oci')
+    def test_get_docker_auth_returns_none_on_request_exception(self, mock_oci, _mock_file, mock_get, config):
+        """When the /v2/ probe raises a RequestException, _get_docker_auth returns None."""
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        mock_get.side_effect = requests.RequestException("connection refused")
+
+        result = client._get_docker_auth(Image('iad.ocir.io/ns/app:v1'))
+        assert result is None
+
+    @patch('src.registry_client.oci')
+    def test_get_manifest_list_sub_digests_returns_empty_without_auth(self, mock_oci, config):
+        """No Docker auth headers -> empty set of sub-digests."""
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        img = Image('iad.ocir.io/ns/app:v1', digest='sha256:abc')
+        with patch.object(client, '_get_docker_auth', return_value=None):
+            assert client._get_manifest_list_sub_digests(img) == set()
+
+    # --- get_image_creation_date ---
+
+    @patch('src.registry_client.oci')
+    def test_get_image_creation_date_returns_cached_for_ocir(self, mock_oci, config):
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+
+        cached_image = Image(
+            'iad.ocir.io/ns/app:v1.0.0',
+            created_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        )
+        with patch.object(client, '_get_ocir_images_via_sdk', return_value=[cached_image]):
+            result = client.get_image_creation_date(Image('iad.ocir.io/ns/app:v1.0.0'))
+        assert result == datetime(2024, 6, 1, tzinfo=timezone.utc)
+
+    @patch('src.registry_client.oci')
+    def test_get_image_creation_date_returns_none_for_ocir_without_match(self, mock_oci, config):
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        with patch.object(client, '_get_ocir_images_via_sdk', return_value=[]):
+            result = client.get_image_creation_date(Image('iad.ocir.io/ns/app:v1.0.0'))
+        assert result is None
+
+    @patch('src.registry_client.oci')
+    def test_get_image_creation_date_returns_none_for_non_ocir(self, mock_oci, config):
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        assert client.get_image_creation_date(Image('docker.io/library/nginx:latest')) is None
+
+    # --- get_old_ocir_images skip/early-return branches ---
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_adds_extra_repositories(self, mock_oci, config):
+        """extra_repositories synthesizes ':latest' Image entries into the scan set."""
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        client._oci_registry = 'iad.ocir.io'
+
+        # _get_ocir_images_via_sdk returns nothing → nothing to recommend, but the
+        # extra-repo loop still runs (covering lines 433-434).
+        with patch.object(client, '_get_ocir_images_via_sdk', return_value=[]):
+            result = client.get_old_ocir_images(set(), extra_repositories=['ns/extra'])
+        assert result == []
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_skips_already_processed_repo(self, mock_oci, config):
+        """Two images for the same repo: the second is skipped via repo_names_processed.
+
+        The duplicate-skip only kicks in once the first image has produced a recommendation
+        (which is when the repo gets added to repo_names_processed), so we set up enough
+        old tags here to actually generate one.
+        """
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+
+        deployed = Image('iad.ocir.io/ns/app:v9.0.0', digest='sha256:dep')
+        # 6 old images so we exceed keep_count=5 and produce one deletion candidate
+        old_images = [
+            Image(f'iad.ocir.io/ns/app:v0.{i}.0',
+                  created_at=datetime(2024, 1, i + 1, tzinfo=timezone.utc),
+                  digest=f'sha256:old{i}',
+                  ocid=f'ocid1.image.old{i}')
+            for i in range(6)
+        ]
+        sdk_response = [deployed, *old_images]
+        sdk_calls = {'count': 0}
+
+        def fake_sdk(_img):
+            sdk_calls['count'] += 1
+            return sdk_response
+
+        with patch.object(client, '_get_ocir_images_via_sdk', side_effect=fake_sdk), \
+             patch.object(client, '_get_manifest_list_sub_digests', return_value=set()):
+            # Two different deployed tags for the same repo
+            img1 = deployed
+            img2 = Image('iad.ocir.io/ns/app:v9.0.1', digest='sha256:dep2')
+            result = client.get_old_ocir_images([img1, img2], keep_count=5)
+
+        assert len(result) == 1  # only one recommendation
+        # The SDK was called exactly once -> second image hit the duplicate-skip branch
+        assert sdk_calls['count'] == 1
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_skips_non_ocir_images(self, mock_oci, config):
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        result = client.get_old_ocir_images([Image('docker.io/library/nginx:latest')])
+        assert result == []
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_skips_when_under_keep_count(self, mock_oci, config):
+        """When filtered tag count <= keep_count, no recommendation is produced."""
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+
+        deployed = Image('iad.ocir.io/ns/app:v1.0.0')
+        old_images = [
+            Image('iad.ocir.io/ns/app:v0.9.0',
+                  created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                  digest='sha256:a'),
+            Image('iad.ocir.io/ns/app:v0.9.1',
+                  created_at=datetime(2024, 2, 1, tzinfo=timezone.utc),
+                  digest='sha256:b'),
+        ]
+        with patch.object(client, '_get_ocir_images_via_sdk', return_value=[deployed, *old_images]):
+            result = client.get_old_ocir_images([deployed], keep_count=5)
+        assert result == []
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_skips_when_all_candidates_protected(self, mock_oci, config):
+        """If every old image's digest is referenced by a kept manifest list, nothing is recommended."""
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+
+        deployed = Image('iad.ocir.io/ns/app:v9.0.0', digest='sha256:deployed')
+        # 6 old tags so we exceed keep_count=5 and have one candidate-for-deletion
+        old_images = [
+            Image(f'iad.ocir.io/ns/app:v0.{i}.0',
+                  created_at=datetime(2024, 1, i + 1, tzinfo=timezone.utc),
+                  digest=f'sha256:old{i}')
+            for i in range(6)
+        ]
+        all_images = [deployed, *old_images]
+
+        # Protected digest set covers the single candidate-for-deletion (oldest = old0)
+        with patch.object(client, '_get_ocir_images_via_sdk', return_value=all_images), \
+             patch.object(client, '_get_manifest_list_sub_digests', return_value={'sha256:old0'}):
+            result = client.get_old_ocir_images([deployed], keep_count=5)
+
+        assert result == []  # filtered_images becomes empty after protection -> continue
+
+    # --- get_orphaned_manifests skip/early-return branches ---
+
+    @patch('src.registry_client.oci')
+    def test_get_orphaned_manifests_adds_extra_repositories(self, mock_oci, config):
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        client._oci_registry = 'iad.ocir.io'
+
+        with patch.object(client, '_get_ocir_images_via_sdk', return_value=[]):
+            result = client.get_orphaned_manifests(set(), extra_repositories=['ns/extra'])
+        assert result == []
+
+    @patch('src.registry_client.oci')
+    def test_get_orphaned_manifests_skips_already_processed_repo(self, mock_oci, config):
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+
+        img1 = Image('iad.ocir.io/ns/app:v1.0.0')
+        img2 = Image('iad.ocir.io/ns/app:v1.0.1')
+        with patch.object(client, '_get_ocir_images_via_sdk', return_value=[]):
+            client.get_orphaned_manifests([img1, img2])  # second skipped via repo_names_processed
+
+    @patch('src.registry_client.oci')
+    def test_get_orphaned_manifests_skips_non_ocir(self, mock_oci, config):
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        result = client.get_orphaned_manifests([Image('docker.io/library/nginx:latest')])
+        assert result == []
+
+    @patch('src.registry_client.oci')
+    def test_get_orphaned_manifests_skips_when_no_platform_manifests_present(self, mock_oci, config):
+        """Repo has tags but no platform manifests → skipped without errors."""
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+
+        deployed = Image('iad.ocir.io/ns/app:v1.0.0', digest='sha256:a')
+        # No 'unknown@sha256:' images present
+        with patch.object(client, '_get_ocir_images_via_sdk', return_value=[deployed]):
+            result = client.get_orphaned_manifests([deployed])
+        assert result == []
+
+    # --- delete_ocir_images ServiceError handling ---
+
+    @patch('src.registry_client.oci')
+    def test_delete_ocir_images_skips_404_and_keeps_going(self, mock_oci, config):
+        """A 404 on delete is treated as already-deleted; the image still appears in results."""
+        mock_oci.exceptions.ServiceError = ServiceError
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+
+        img = Image('iad.ocir.io/ns/app:old1', ocid='ocid1.image.deleted')
+        client.artifacts_client.delete_container_image.side_effect = ServiceError(
+            status=404, code='NF', headers={}, message='gone'
+        )
+        rec = CleanupRecommendation('iad.ocir.io', 'ns/app', [img])
+
+        deleted = client.delete_ocir_images([rec])
+        assert deleted == [img]
+
+    @patch('src.registry_client.oci')
+    def test_delete_ocir_images_reraises_non_404_service_errors(self, mock_oci, config):
+        """A non-404 ServiceError propagates out of delete_ocir_images."""
+        mock_oci.exceptions.ServiceError = ServiceError
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+
+        img = Image('iad.ocir.io/ns/app:bad', ocid='ocid1.image.bad')
+        client.artifacts_client.delete_container_image.side_effect = ServiceError(
+            status=500, code='X', headers={}, message='server boom'
+        )
+        rec = CleanupRecommendation('iad.ocir.io', 'ns/app', [img])
+
+        with pytest.raises(ServiceError):
+            client.delete_ocir_images([rec])

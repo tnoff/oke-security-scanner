@@ -7,19 +7,14 @@ from logging import getLogger
 import time
 from typing import List
 
-from dappertable import DapperTable, DapperTableHeader, DapperTableHeaderOptions, PaginationLength
-from opentelemetry import trace
+from dappertable import DapperTable, Column, Columns, PaginationLength
 import requests
 
 from .k8s_client import Image
 from .scanner import CompleteScanResult
-from .registry_client import UpdateInfo, CleanupRecommendation
-from .oke_client import NodeImageUpdateInfo
+from .registry_client import CleanupRecommendation
 
 logger = getLogger(__name__)
-tracer = trace.get_tracer(__name__)
-
-OTEL_PREFIX = 'discord'
 
 class DiscordNotifier:
     """Send scan results to Discord via webhook."""
@@ -36,22 +31,22 @@ class DiscordNotifier:
     def send_image_scan_report(self, complete_scan_result: CompleteScanResult):
         '''Send complete scan report to discord'''
 
-        full_report_table = DapperTable(header_options=DapperTableHeaderOptions([
-            DapperTableHeader('Report Portion', 32),
-            DapperTableHeader('Result', 8),
+        full_report_table = DapperTable(columns=Columns([
+            Column('Report Portion', 32),
+            Column('Result', 8),
         ]), pagination_options=PaginationLength(self.max_length), enclosure_start='```', enclosure_end='```',
         prefix='## Scan Result Report\n')
-        full_report_table.add_row(['Images Scanned', len(complete_scan_result.scan_results)])
-        full_report_table.add_row(['Scans Failed', complete_scan_result.failed_scans])
+        full_report_table.add_row(['Images Scanned', str(len(complete_scan_result.scan_results))])
+        full_report_table.add_row(['Scans Failed', str(complete_scan_result.failed_scans)])
         full_report_table.add_row(['Critical (Fixed/Total)', f'{complete_scan_result.total_critical_fixed}/{complete_scan_result.total_critical}'])
         full_report_table.add_row(['High (Fixed/Total)', f'{complete_scan_result.total_high_fixed}/{complete_scan_result.total_high}'])
 
 
-        critical_fixed_table = DapperTable(header_options=DapperTableHeaderOptions([
-            DapperTableHeader('Image', 32),
-            DapperTableHeader('CVE', 16),
-            DapperTableHeader('Package', 16),
-            DapperTableHeader('Fixed', 16)
+        critical_fixed_table = DapperTable(columns=Columns([
+            Column('Image', 32),
+            Column('CVE', 16),
+            Column('Package', 16),
+            Column('Fixed', 16)
             ]), pagination_options=PaginationLength(self.max_length), enclosure_end='```', enclosure_start='```',
                 prefix='### Critical CVEs with Fixes\n')
 
@@ -75,8 +70,8 @@ class DiscordNotifier:
                             detail.package,
                             detail.fixed,
                         ])
-        failed_table = DapperTable(header_options=DapperTableHeaderOptions([
-            DapperTableHeader('Image', 64),
+        failed_table = DapperTable(columns=Columns([
+            Column('Image', 64),
         ]), pagination_options=PaginationLength(self.max_length), enclosure_start='```', enclosure_end='```',
         prefix='### Failed Scans\n')
 
@@ -87,47 +82,21 @@ class DiscordNotifier:
             failed_table.add_row([f'{repo_name}:{image.tag}'])
 
         message_content = []
-        message_content += full_report_table.print()
+        message_content += full_report_table.render()
 
-        if failed_table.size:
-            message_content += failed_table.print()
-        if critical_fixed_table.size:
-            message_content += critical_fixed_table.print()
+        if len(failed_table):
+            message_content += failed_table.render()
+        if len(critical_fixed_table):
+            message_content += critical_fixed_table.render()
         self._send_message(message_content)
         self._send_file('## Full Vulnerability CSV Report', output.getvalue(), f'{datetime.now().strftime("%Y-%m-%d")}.vulnerabilites.csv')
 
-    def send_version_update_info(self, update_info: list[UpdateInfo]):
-        '''Send update info to discord'''
-
-        full_report_table = DapperTable(header_options=DapperTableHeaderOptions([
-            DapperTableHeader('Image', 64),
-            DapperTableHeader('Current', 12),
-            DapperTableHeader('Available', 12),
-        ]), pagination_options=PaginationLength(self.max_length), enclosure_start='```', enclosure_end='```',
-        prefix='## Image Updates Available\n')
-
-        for info in update_info:
-            repo_name = f'{info.registry}/{info.repo_name}'
-            if info.registry == 'docker.io':
-                repo_name = info.repo_name
-            full_report_table.add_row([
-                repo_name,
-                info.current,
-                info.latest,
-            ])
-        content = []
-        if not full_report_table.size:
-            content = ['## No Image Updates Found\n']
-        else:
-            content = full_report_table.print()
-        self._send_message(content)
-
     def send_cleanup_recommendations(self, cleanup: list[CleanupRecommendation]):
         '''Send cleanup recommendation'''
-        full_report_table = DapperTable(header_options=DapperTableHeaderOptions([
-            DapperTableHeader('Image', 64),
-            DapperTableHeader('Tag', 12),
-            DapperTableHeader('Created At', 36),
+        full_report_table = DapperTable(columns=Columns([
+            Column('Image', 64),
+            Column('Tag', 12),
+            Column('Created At', 36),
         ]), pagination_options=PaginationLength(self.max_length), enclosure_start='```', enclosure_end='```',
         prefix='## Images That Can Be Deleted\n')
 
@@ -138,11 +107,10 @@ class DiscordNotifier:
                     tag.tag,
                     tag.created_at.strftime('%Y-%m-%d %H-%M-%S')
                 ])
-        content = []
-        if full_report_table.size < 1:
-            content = ['## No Images That Require Deletion\n']
+        if len(full_report_table):
+            content = full_report_table.render()
         else:
-            content = full_report_table.print()
+            content = ['## No Images That Require Deletion\n']
         self._send_message(content)
 
     def send_deletion_results(self, images: list[Image], is_orphaned: bool = False):
@@ -150,9 +118,9 @@ class DiscordNotifier:
         prefix = '## Images Deleted\n'
         if is_orphaned:
             prefix = '## Orphan Intermediate Images Deleted\n'
-        full_report_table = DapperTable(header_options=DapperTableHeaderOptions([
-            DapperTableHeader('Image', 64),
-            DapperTableHeader('Tag', 12),
+        full_report_table = DapperTable(columns=Columns([
+            Column('Image', 64),
+            Column('Tag', 12),
         ]), pagination_options=PaginationLength(self.max_length), enclosure_start='```', enclosure_end='```',
         prefix=prefix)
 
@@ -164,57 +132,25 @@ class DiscordNotifier:
                 f'{image.registry}/{image.repo_name}',
                 output_tag,
             ])
-        content = []
-        if full_report_table.size < 1:
+        if len(full_report_table):
+            content = full_report_table.render()
+        else:
             content = ['## No images deleted\n']
-        else:
-            content = full_report_table.print()
-        self._send_message(content)
-
-    def send_node_image_report(self, updates: list[NodeImageUpdateInfo]):
-        """Send node image update report to Discord.
-
-        Args:
-            updates: List of NodeImageUpdateInfo with available updates
-        """
-        full_report_table = DapperTable(header_options=DapperTableHeaderOptions([
-            DapperTableHeader('Node Pool', 24),
-            DapperTableHeader('Current Image Date', 16),
-            DapperTableHeader('Latest Image Date', 16),
-        ]), pagination_options=PaginationLength(self.max_length), enclosure_start='```', enclosure_end='```',
-        prefix='## OKE Node Image Updates Available\n')
-
-        for update in updates:
-            current_date = update.current_image_date.strftime('%Y.%m.%d') if update.current_image_date else 'Unknown'
-            latest_date = update.latest_image_date.strftime('%Y.%m.%d') if update.latest_image_date else 'Unknown'
-            full_report_table.add_row([
-                update.node_pool_name,
-                current_date,
-                latest_date,
-            ])
-
-        content = []
-        if not full_report_table.size:
-            content = ['## OKE Node Images Up To Date\n']
-        else:
-            content = full_report_table.print()
-            content.append('\n*Cycle node pools to apply updates: OCI Console > OKE > Node Pools > Edit*')
         self._send_message(content)
 
     def _send_file(self, message_content: str, file_contents: str, file_name: str):
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.send_file'):
-            # Send with file attachment using multipart/form-data
-            files = {
-                "file": (file_name, file_contents, "text/csv")
-            }
-            data = {"content": message_content}
-            response = requests.post(
-                self.webhook_url,
-                data=data,
-                files=files,
-                timeout=10,
-            )
-            response.raise_for_status()
+        # Send with file attachment using multipart/form-data
+        files = {
+            "file": (file_name, file_contents, "text/csv")
+        }
+        data = {"content": message_content}
+        response = requests.post(
+            self.webhook_url,
+            data=data,
+            files=files,
+            timeout=10,
+        )
+        response.raise_for_status()
 
     def _send_message(self, content_list: List[str]) -> None:
         """Send single message to Discord webhook.
@@ -226,15 +162,14 @@ class DiscordNotifier:
         Raises:
             requests.HTTPError: If webhook request fails
         """
-        with tracer.start_as_current_span(f'{OTEL_PREFIX}.send_message'):
-            for content in content_list:
-                # Send as JSON payload (backward compatibility)
-                payload = {"content": content}
-                response = requests.post(
-                    self.webhook_url,
-                    json=payload,
-                    timeout=10,
-                )
-                response.raise_for_status()
-                # Sleep one second to avoid rate limiting
-                time.sleep(1)
+        for content in content_list:
+            # Send as JSON payload (backward compatibility)
+            payload = {"content": content}
+            response = requests.post(
+                self.webhook_url,
+                json=payload,
+                timeout=10,
+            )
+            response.raise_for_status()
+            # Sleep one second to avoid rate limiting
+            time.sleep(1)

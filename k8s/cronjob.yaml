@@ -30,49 +30,62 @@ spec:
                 memory: "2Gi"
                 cpu: "2000m"
             env:
-              # OCIR credentials from secret
-              - name: OCI_REGISTRY
-                valueFrom:
-                  secretKeyRef:
-                    name: security-scanner-secrets
-                    key: OCI_REGISTRY
-              - name: OCI_USERNAME
-                valueFrom:
-                  secretKeyRef:
-                    name: security-scanner-secrets
-                    key: OCI_USERNAME
-              - name: OCI_TOKEN
-                valueFrom:
-                  secretKeyRef:
-                    name: security-scanner-secrets
-                    key: OCI_TOKEN
-              - name: OCI_NAMESPACE
-                valueFrom:
-                  secretKeyRef:
-                    name: security-scanner-secrets
-                    key: OCI_NAMESPACE
-
               # Trivy configuration
               - name: TRIVY_SEVERITY
                 valueFrom:
                   secretKeyRef:
-                    name: security-scanner-secrets
+                    name: security-scanner-config
                     key: TRIVY_SEVERITY
               - name: TRIVY_TIMEOUT
                 valueFrom:
                   secretKeyRef:
-                    name: security-scanner-secrets
+                    name: security-scanner-config
                     key: TRIVY_TIMEOUT
 
               # Scanning configuration
               - name: EXCLUDE_NAMESPACES
                 valueFrom:
                   secretKeyRef:
-                    name: security-scanner-secrets
+                    name: security-scanner-config
                     key: EXCLUDE_NAMESPACES
+
+              # Discord notifications (optional)
+              # - name: DISCORD_WEBHOOK_URL
+              #   valueFrom:
+              #     secretKeyRef:
+              #       name: security-scanner-config
+              #       key: DISCORD_WEBHOOK_URL
+
+              # OCIR cleanup (optional; see README for the full env-var reference)
+              # - name: OCIR_CLEANUP_ENABLED
+              #   value: "true"
+              # - name: OCIR_CLEANUP_KEEP_COUNT
+              #   value: "5"
             volumeMounts:
               - name: trivy-cache
                 mountPath: /home/scanner/.cache/trivy
+              # OCI SDK config (~/.oci/config) — needed for OCIR list/delete calls.
+              - name: oci-config
+                mountPath: /home/scanner/.oci
+                readOnly: true
+              # Docker config (~/.docker/config.json) — needed when resolving
+              # multi-arch manifest lists in OCIR during orphan detection.
+              - name: docker-config
+                mountPath: /home/scanner/.docker
+                readOnly: true
           volumes:
             - name: trivy-cache
               emptyDir: {}
+            - name: oci-config
+              secret:
+                secretName: security-scanner-oci-config
+                # Secret must contain keys `config` and `oci_api_key.pem`
+                defaultMode: 0400
+            - name: docker-config
+              secret:
+                secretName: security-scanner-docker-config
+                # Secret must contain key `config.json`
+                items:
+                  - key: config.json
+                    path: config.json
+                    mode: 0400

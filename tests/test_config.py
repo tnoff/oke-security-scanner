@@ -11,7 +11,6 @@ class TestConfig:
         """Test Config.from_env with all environment variables set."""
         monkeypatch.setenv("OTLP_ENDPOINT", "http://localhost:4318")
         monkeypatch.setenv("OTLP_INSECURE", "true")
-        monkeypatch.setenv("OTLP_TRACES_ENABLED", "true")
         monkeypatch.setenv("OTLP_METRICS_ENABLED", "true")
         monkeypatch.setenv("OTLP_LOGS_ENABLED", "true")
         monkeypatch.setenv("TRIVY_SEVERITY", "CRITICAL,HIGH,MEDIUM")
@@ -23,14 +22,11 @@ class TestConfig:
         monkeypatch.setenv("OCIR_CLEANUP_ENABLED", "true")
         monkeypatch.setenv("OCIR_CLEANUP_KEEP_COUNT", "10")
         monkeypatch.setenv("OCIR_EXTRA_REPOSITORIES", "repo1,repo2")
-        monkeypatch.setenv("OKE_IMAGE_CHECK_ENABLED", "true")
-        monkeypatch.setenv("OKE_CLUSTER_OCID", "ocid1.cluster.oc1.test")
 
         config = Config.from_env()
 
         assert config.otlp_endpoint == "http://localhost:4318"
         assert config.otlp_insecure is True
-        assert config.otlp_traces_enabled is True
         assert config.otlp_metrics_enabled is True
         assert config.otlp_logs_enabled is True
         assert config.trivy_severity == "CRITICAL,HIGH,MEDIUM"
@@ -42,8 +38,6 @@ class TestConfig:
         assert config.ocir_cleanup_enabled is True
         assert config.ocir_cleanup_keep_count == 10
         assert config.ocir_extra_repositories == ["repo1", "repo2"]
-        assert config.oke_image_check_enabled is True
-        assert config.oke_cluster_ocid == "ocid1.cluster.oc1.test"
 
     def test_from_env_with_defaults(self):
         """Test Config.from_env with default values."""
@@ -52,7 +46,6 @@ class TestConfig:
         # Check defaults
         assert config.otlp_endpoint == "http://localhost:4317"
         assert config.otlp_insecure is True
-        assert config.otlp_traces_enabled is False
         assert config.otlp_metrics_enabled is False
         assert config.otlp_logs_enabled is False
         assert config.trivy_severity == "CRITICAL,HIGH"
@@ -63,8 +56,8 @@ class TestConfig:
         assert config.discord_webhook_url == ""
         assert config.ocir_cleanup_enabled is False
         assert config.ocir_cleanup_keep_count == 5
-        assert config.oke_image_check_enabled is False
-        assert config.oke_cluster_ocid == ""
+        # Unset env var must yield empty list (not [""])
+        assert config.ocir_extra_repositories == []
 
     def test_from_env_otlp_insecure_false(self, monkeypatch):
         """Test OTLP_INSECURE=false."""
@@ -77,13 +70,6 @@ class TestConfig:
         """Test that Discord webhook URL is empty by default."""
         config = Config.from_env()
         assert config.discord_webhook_url == ""
-
-    def test_otlp_traces_enabled(self, monkeypatch):
-        """Test OTLP_TRACES_ENABLED=true."""
-        monkeypatch.setenv("OTLP_TRACES_ENABLED", "true")
-
-        config = Config.from_env()
-        assert config.otlp_traces_enabled is True
 
     def test_otlp_metrics_enabled(self, monkeypatch):
         """Test OTLP_METRICS_ENABLED=true."""
@@ -112,30 +98,6 @@ class TestConfig:
 
         config = Config.from_env()
         assert config.ocir_cleanup_keep_count == 10
-
-    def test_oke_image_check_enabled(self, monkeypatch):
-        """Test OKE_IMAGE_CHECK_ENABLED=true."""
-        monkeypatch.setenv("OKE_IMAGE_CHECK_ENABLED", "true")
-
-        config = Config.from_env()
-        assert config.oke_image_check_enabled is True
-
-    def test_oke_image_check_disabled_by_default(self):
-        """Test OKE_IMAGE_CHECK_ENABLED defaults to false."""
-        config = Config.from_env()
-        assert config.oke_image_check_enabled is False
-
-    def test_oke_cluster_ocid(self, monkeypatch):
-        """Test OKE_CLUSTER_OCID setting."""
-        monkeypatch.setenv("OKE_CLUSTER_OCID", "ocid1.cluster.oc1.test")
-
-        config = Config.from_env()
-        assert config.oke_cluster_ocid == "ocid1.cluster.oc1.test"
-
-    def test_oke_cluster_ocid_empty_by_default(self):
-        """Test OKE_CLUSTER_OCID defaults to empty string."""
-        config = Config.from_env()
-        assert config.oke_cluster_ocid == ""
 
     def test_trivy_platform(self, monkeypatch):
         """Test TRIVY_PLATFORM setting."""
