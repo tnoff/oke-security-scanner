@@ -22,6 +22,9 @@ def base_config():
         ocir_cleanup_enabled=False,
         ocir_cleanup_keep_count=5,
         ocir_extra_repositories=[],
+        enable_scan=True,
+        enable_cleanup=True,
+        cleanup_repo="",
     )
 
 

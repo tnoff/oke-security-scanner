@@ -99,7 +99,44 @@ All configuration is provided via Kubernetes secrets as environment variables:
 | `OCIR_CLEANUP_ENABLED` | No | `false` | Enable automatic deletion of old OCIR commit hash tags |
 | `OCIR_CLEANUP_KEEP_COUNT` | No | `5` | Number of recent commit hash tags to keep per repository |
 | `OCIR_EXTRA_REPOSITORIES` | No | `''` | Check extra repos for old images to remove |
+| `ENABLE_SCAN` | No | `true` | Run the Trivy vulnerability scan phase |
+| `ENABLE_CLEANUP` | No | `true` | Run the OCIR tag + orphan-manifest cleanup phase |
+| `CLEANUP_REPO` | No | `''` | Scope the cleanup phase to one OCIR repo (namespace-qualified, e.g. `tnoff/discord_bot`) |
 
+
+## Phase toggles and on-push cleanup
+
+The scanner has two independent phases — Trivy scan and OCIR cleanup —
+each gated by an env var (`ENABLE_SCAN` / `ENABLE_CLEANUP`, both default
+`true`). The daily CronJob runs both. Producer pipelines that want to
+prune old tags as soon as they push a new image can fire a one-off Job
+derived from the CronJob template with `ENABLE_SCAN=false`:
+
+```bash
+kubectl -n default create job "cleanup-${REPO}-${TAG}" \
+  --from=cronjob/security-scanner --dry-run=client -o json \
+| jq '.spec.template.spec.containers[0].env += [
+    {"name":"ENABLE_SCAN","value":"false"},
+    {"name":"CLEANUP_REPO","value":"'"$OCIR_REPO"'"},
+    {"name":"OCIR_CLEANUP_ENABLED","value":"true"}
+  ]' \
+| kubectl apply -f -
+```
+
+Setting `CLEANUP_REPO` scopes the cleanup phase to a single OCIR repo;
+unset, cleanup sweeps every image deployed in the cluster. The
+currently-deployed tag is always protected — at push time the cluster
+is still running the old tag, so the deployed-image protection in
+`get_old_ocir_images` catches it.
+
+[`k8s/rbac-cleanup-trigger.yaml`](./k8s/rbac-cleanup-trigger.yaml)
+provides a Role and RoleBinding granting a CI ServiceAccount the
+minimum permissions to spawn this Job (default subjects: `gitlab-runner`
+SA in the `gitlab-runner` namespace — adjust to match your setup).
+
+At least one of `ENABLE_SCAN` / `ENABLE_CLEANUP` must be `true`; a
+`Config` with both off (or `CLEANUP_REPO` set with cleanup disabled)
+fails fast at startup.
 
 ## Required Permissions
 

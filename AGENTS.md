@@ -61,7 +61,12 @@ Single gauge metric (`image_scan`) defined in `telemetry.create_metrics()`. Attr
 `setup_telemetry(cfg) -> tuple[Optional[MeterProvider], Optional[LoggerProvider]]`. Each provider is `None` if that OTLP component is disabled. `create_metrics(meter_provider)` returns `None` when its argument is `None`. Resource attributes come from `OTELResourceDetector()`.
 
 ### `src/main.py`
-Orchestration only. Flow: load config → set up telemetry → update Trivy DB → init K8s/Trivy clients → discover & scan images → optional Discord report → emit metrics → compute & optionally apply OCIR cleanup → compute & optionally apply orphan-manifest cleanup → flush+shutdown providers in `finally`.
+Orchestration only. `main()` is two phase calls, each gated by an env flag:
+
+- `run_scan(config, logger_provider, scanner_metrics, notifier) -> set[Image]` — runs when `ENABLE_SCAN=true` (default). Updates Trivy DB, lists pods, scans every image, posts the Discord report, emits metrics. Returns the discovered image set.
+- `run_cleanup(config, logger_provider, notifier, discovered_images=None)` — runs when `ENABLE_CLEANUP=true` (default). Reuses `discovered_images` if `run_scan` already populated it; otherwise lists pods itself. If `CLEANUP_REPO` is set, the run is scoped to that single OCIR repo (image set filtered + `extra_repositories=[cleanup_repo]` so cleanup happens even with nothing deployed); otherwise it sweeps every image and uses `config.ocir_extra_repositories`.
+
+Producer pipelines fire a one-off Job (via `kubectl create job --from=cronjob/security-scanner`) with `ENABLE_SCAN=false` + `CLEANUP_REPO=<repo>` so cleanup runs right after a push, without waiting for the daily cron. The deployed-tag protection still works: at push time the cluster is still running the old tag, so `get_old_ocir_images` finds it via k8s discovery and protects it.
 
 The `if __name__ == "__main__":` guard is marked `# pragma: no cover` (standard untestable pattern).
 

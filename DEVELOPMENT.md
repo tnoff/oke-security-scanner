@@ -70,6 +70,9 @@ The scanner is configured entirely via environment variables. All variables are 
 | `OCIR_CLEANUP_ENABLED` | `false` | Delete old images (dry-run when `false`) |
 | `OCIR_CLEANUP_KEEP_COUNT` | `5` | Number of most-recent tags to keep per repository |
 | `OCIR_EXTRA_REPOSITORIES` | _(empty)_ | Comma-separated extra OCIR repos to include in cleanup |
+| `ENABLE_SCAN` | `true` | Run the Trivy scan phase |
+| `ENABLE_CLEANUP` | `true` | Run the OCIR cleanup phase |
+| `CLEANUP_REPO` | _(empty)_ | Scope the cleanup phase to one OCIR repo, e.g. `tnoff/discord_bot` (see README) |
 
 ## Running locally
 

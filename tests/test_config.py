@@ -110,3 +110,44 @@ class TestConfig:
         """Test TRIVY_PLATFORM defaults to empty string."""
         config = Config.from_env()
         assert config.trivy_platform == ""
+
+    def test_phase_toggles_default_on(self):
+        """ENABLE_SCAN and ENABLE_CLEANUP default to True; CLEANUP_REPO to empty."""
+        config = Config.from_env()
+        assert config.enable_scan is True
+        assert config.enable_cleanup is True
+        assert config.cleanup_repo == ""
+
+    def test_enable_scan_off(self, monkeypatch):
+        """ENABLE_SCAN=false with cleanup still enabled is valid (on-push Job shape)."""
+        monkeypatch.setenv("ENABLE_SCAN", "false")
+        monkeypatch.setenv("CLEANUP_REPO", "tnoff/discord_bot")
+
+        config = Config.from_env()
+        assert config.enable_scan is False
+        assert config.enable_cleanup is True
+        assert config.cleanup_repo == "tnoff/discord_bot"
+
+    def test_enable_cleanup_off(self, monkeypatch):
+        """ENABLE_CLEANUP=false with scan still enabled is valid (scan-only run)."""
+        monkeypatch.setenv("ENABLE_CLEANUP", "false")
+
+        config = Config.from_env()
+        assert config.enable_scan is True
+        assert config.enable_cleanup is False
+
+    def test_both_disabled_raises(self, monkeypatch):
+        """Disabling both phases is a misconfiguration — fail fast."""
+        monkeypatch.setenv("ENABLE_SCAN", "false")
+        monkeypatch.setenv("ENABLE_CLEANUP", "false")
+
+        with pytest.raises(ValueError, match="ENABLE_SCAN"):
+            Config.from_env()
+
+    def test_cleanup_repo_without_cleanup_phase_raises(self, monkeypatch):
+        """CLEANUP_REPO set while ENABLE_CLEANUP=false is a misconfiguration."""
+        monkeypatch.setenv("ENABLE_CLEANUP", "false")
+        monkeypatch.setenv("CLEANUP_REPO", "tnoff/discord_bot")
+
+        with pytest.raises(ValueError, match="CLEANUP_REPO"):
+            Config.from_env()

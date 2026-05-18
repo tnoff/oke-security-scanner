@@ -1,0 +1,50 @@
+---
+# RBAC for the GitLab runner to spawn one-off cleanup Jobs from the
+# security-scanner CronJob template.
+#
+# A producer repo's pipeline (e.g. docker-apps) fires this immediately
+# after a new image is pushed by running:
+#
+#   kubectl -n <SCANNER_NS> create job cleanup-<repo>-<sha> \
+#     --from=cronjob/security-scanner --dry-run=client -o json \
+#   | jq '.spec.template.spec.containers[0].env += [
+#         {"name":"ENABLE_SCAN","value":"false"},
+#         {"name":"CLEANUP_REPO","value":"<ocir-repo>"},
+#         {"name":"OCIR_CLEANUP_ENABLED","value":"true"}
+#       ]' \
+#   | kubectl apply -f -
+#
+# The Role grants the minimum needed for that to work: read the CronJob
+# (so `--from=cronjob/...` can pull the pod template) and create Jobs in
+# the scanner's namespace.
+#
+# Adjust the RoleBinding `subjects` to match the ServiceAccount your CI
+# runners actually use. The default below matches the `gitlab-runner` SA
+# in the `gitlab-runner` namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: security-scanner-cleanup-trigger
+  namespace: default
+rules:
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    resourceNames: ["security-scanner"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: security-scanner-cleanup-trigger
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: security-scanner-cleanup-trigger
+subjects:
+  - kind: ServiceAccount
+    name: gitlab-runner
+    namespace: gitlab-runner

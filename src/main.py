@@ -11,7 +11,7 @@ from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
 from .config import Config
 from .telemetry import setup_telemetry, create_metrics, Metrics
-from .k8s_client import KubernetesClient
+from .k8s_client import KubernetesClient, Image
 from .scanner import TrivyScanner, CompleteScanResult
 from .discord_notifier import DiscordNotifier
 from .registry_client import RegistryClient
@@ -43,6 +43,106 @@ def send_scan_metrics(metric_provider: Metrics, scan_results: CompleteScanResult
             'severity': 'high',
         })
 
+def run_scan(
+    config: Config,
+    logger_provider: Optional[LoggerProvider],
+    scanner_metrics: Optional[Metrics],
+    notifier: Optional[DiscordNotifier],
+) -> set[Image]:
+    """Run the Trivy scan phase and return the discovered image set.
+
+    The returned set is reused by the cleanup phase (so we don't list
+    pods twice when both phases run in the same Job).
+    """
+    scanner = TrivyScanner(config, logger_provider)
+    logger.info("Updating Trivy vulnerability database...")
+    if not scanner.update_database():
+        logger.warning("Trivy database update failed, using cached database")
+
+    logger.debug("Initializing Kubernetes client")
+    k8s_client = KubernetesClient(config, logger_provider)
+
+    logger.info("Discovering deployed container images...")
+    images = k8s_client.get_all_images()
+    logger.info(f"Beginning vulnerability scans ({len(images)} images)")
+    scan_results = CompleteScanResult()
+
+    for idx, image in enumerate(sorted(images), 1):
+        logger.info(f"[{idx}/{len(images)}] Scanning: {image.full_name}")
+        result = scanner.scan_image(image)
+        scan_results.add_result(result, image)
+
+    if notifier:
+        logger.debug("Sending Discord webhook notification...")
+        notifier.send_image_scan_report(scan_results)
+
+    if scanner_metrics:
+        logger.info('Sending out scan metrics')
+        send_scan_metrics(scanner_metrics, scan_results)
+
+    return images
+
+def run_cleanup(
+    config: Config,
+    logger_provider: Optional[LoggerProvider],
+    notifier: Optional[DiscordNotifier],
+    discovered_images: Optional[set[Image]] = None,
+):
+    """Run the OCIR tag + orphan-manifest cleanup phase.
+
+    If ``CLEANUP_REPO`` is set, the cleanup is scoped to that single
+    OCIR repo (used by producer pipelines that fire a one-off Job after
+    pushing). Otherwise it sweeps every deployed image. ``discovered_images``
+    is passed by ``run_scan`` to avoid re-listing pods.
+    """
+    if discovered_images is None:
+        k8s_client = KubernetesClient(config, logger_provider)
+        discovered_images = k8s_client.get_all_images()
+
+    if config.cleanup_repo:
+        logger.info(f"Cleanup scoped to repo: {config.cleanup_repo}")
+        images = {
+            im for im in discovered_images
+            if im.is_ocir_image and im.repo_name == config.cleanup_repo
+        }
+        # Always include the target repo in extras so cleanup runs even if
+        # nothing is currently deployed (e.g. first push of a new repo).
+        extras = [config.cleanup_repo]
+    else:
+        images = discovered_images
+        extras = config.ocir_extra_repositories
+
+    registry_client = RegistryClient(config)
+
+    logger.info("Checking for OCIR cleanup recommendations...")
+    cleanup_recommendations = registry_client.get_old_ocir_images(
+        images, keep_count=config.ocir_cleanup_keep_count,
+        extra_repositories=extras,
+    )
+    if config.ocir_cleanup_enabled:
+        deletion_results = registry_client.delete_ocir_images(cleanup_recommendations)
+        if notifier:
+            logger.debug("Sending Discord webhook notification...")
+            notifier.send_deletion_results(deletion_results)
+    elif notifier:
+        logger.debug("Sending Discord webhook notification...")
+        notifier.send_cleanup_recommendations(cleanup_recommendations)
+
+    logger.info("Checking for orphaned platform manifests...")
+    orphan_recommendations = registry_client.get_orphaned_manifests(
+        images, extra_repositories=extras,
+    )
+    for rec in orphan_recommendations:
+        logger.info(f"Found {len(rec.tags_to_delete)} orphaned manifests in {rec.repository}")
+
+    if config.ocir_cleanup_enabled:
+        orphans_deleted = registry_client.delete_ocir_images(orphan_recommendations)
+        if orphans_deleted:
+            logger.info(f"Deleted {len(orphans_deleted)} orphaned platform manifests")
+        if notifier:
+            logger.debug("Sending Discord webhook notification...")
+            notifier.send_deletion_results(orphans_deleted, is_orphaned=True)
+
 def main():
     """Run the security scanner."""
     # Configure logging to DEBUG level and output to stdout
@@ -69,69 +169,20 @@ def main():
 
     try:
         meter_provider, logger_provider, scanner_metrics = setup_otel(config)
-        scanner = TrivyScanner(config, logger_provider)
-        logger.info("Updating Trivy vulnerability database...")
-        if not scanner.update_database():
-            logger.warning("Trivy database update failed, using cached database")
+        notifier = DiscordNotifier(config.discord_webhook_url) if config.discord_webhook_url else None
 
-        logger.debug("Initializing Kubernetes client")
-        k8s_client = KubernetesClient(config, logger_provider)
+        discovered_images = None
+        if config.enable_scan:
+            discovered_images = run_scan(config, logger_provider, scanner_metrics, notifier)
+        else:
+            logger.info("ENABLE_SCAN=false — skipping Trivy scan phase")
 
-        logger.info("Discovering deployed container images...")
-        images = k8s_client.get_all_images()
-        logger.info(f"Beginning vulnerability scans ({len(images)} images)")
-        scan_results = CompleteScanResult()
+        if config.enable_cleanup:
+            run_cleanup(config, logger_provider, notifier, discovered_images)
+        else:
+            logger.info("ENABLE_CLEANUP=false — skipping OCIR cleanup phase")
 
-        for idx, image in enumerate(sorted(images), 1):
-            logger.info(f"[{idx}/{len(images)}] Scanning: {image.full_name}")
-            result = scanner.scan_image(image)
-            scan_results.add_result(result, image)
-
-        if config.discord_webhook_url:
-            logger.debug("Sending Discord webhook notification...")
-            notifier = DiscordNotifier(config.discord_webhook_url)
-            notifier.send_image_scan_report(scan_results)
-
-        if scanner_metrics:
-            logger.info('Sending out scan metrics')
-            send_scan_metrics(scanner_metrics, scan_results)
-
-        logger.info("Checking for OCIR cleanup recommendations...")
-        registry_client = RegistryClient(config)
-        cleanup_recommendations = registry_client.get_old_ocir_images(
-            images, keep_count=config.ocir_cleanup_keep_count,
-            extra_repositories=config.ocir_extra_repositories,
-        )
-        if config.ocir_cleanup_enabled:
-            deletion_results = registry_client.delete_ocir_images(cleanup_recommendations)
-            if config.discord_webhook_url:
-                logger.debug("Sending Discord webhook notification...")
-                notifier = DiscordNotifier(config.discord_webhook_url)
-                notifier.send_deletion_results(deletion_results)
-        elif config.discord_webhook_url:
-            logger.debug("Sending Discord webhook notification...")
-            notifier = DiscordNotifier(config.discord_webhook_url)
-            notifier.send_cleanup_recommendations(cleanup_recommendations)
-
-        # Orphan manifest cleanup
-        logger.info("Checking for orphaned platform manifests...")
-        orphan_recommendations = registry_client.get_orphaned_manifests(
-            images,
-            extra_repositories=config.ocir_extra_repositories,
-        )
-        for rec in orphan_recommendations:
-            logger.info(f"Found {len(rec.tags_to_delete)} orphaned manifests in {rec.repository}")
-
-        if config.ocir_cleanup_enabled:
-            orphans_deleted = registry_client.delete_ocir_images(orphan_recommendations)
-            if orphans_deleted:
-                logger.info(f"Deleted {len(orphans_deleted)} orphaned platform manifests")
-            if config.discord_webhook_url:
-                logger.debug("Sending Discord webhook notification...")
-                notifier = DiscordNotifier(config.discord_webhook_url)
-                notifier.send_deletion_results(orphans_deleted, is_orphaned=True)
-
-        logger.info("Scan completed successfully")
+        logger.info("Run completed successfully")
 
     finally:
         # Properly shutdown telemetry to flush all pending data

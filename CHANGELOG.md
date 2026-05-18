@@ -5,6 +5,17 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-18
+
+### Added
+- `ENABLE_SCAN` and `ENABLE_CLEANUP` env vars (both default `true`) gating the Trivy scan and OCIR cleanup phases independently. Producer pipelines that fire a one-off Job after pushing a new image set `ENABLE_SCAN=false` so only cleanup runs, without waiting for the daily cron.
+- `CLEANUP_REPO` env var that scopes the cleanup phase to a single OCIR repo (namespace-qualified, e.g. `tnoff/discord_bot`). Unset, cleanup sweeps every deployed image.
+- `k8s/rbac-cleanup-trigger.yaml` — Role + RoleBinding scoped to `default` namespace granting a CI ServiceAccount permission to read the `security-scanner` CronJob and create Jobs from it.
+- Config validation: fails fast if both phases are disabled, or if `CLEANUP_REPO` is set while `ENABLE_CLEANUP=false`.
+
+### Changed
+- `main()` reshaped into two phase calls (`run_scan` / `run_cleanup`); the scan phase passes its discovered image set to cleanup so both phases share one k8s pod listing.
+
 ## [0.1.0] - 2026-05-15
 
 This release refocuses the scanner on its two surviving features — **Trivy vulnerability scanning** and **OCIR cleanup** (old tags + orphaned platform manifests) — and removes everything else. It also slims the Docker image, drops OTLP tracing, migrates to the latest `dappertable`, and brings test coverage to 100%.

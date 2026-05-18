@@ -31,6 +31,21 @@ class Config:
     ocir_cleanup_keep_count: int
     ocir_extra_repositories: list[str]
 
+    # Phase toggles — the daily CronJob runs both; producer pipelines that
+    # fire a one-off Job after pushing flip ENABLE_SCAN off so only the
+    # cleanup pass runs (typically scoped via CLEANUP_REPO).
+    enable_scan: bool
+    enable_cleanup: bool
+    # When set, the cleanup pass is scoped to this OCIR repo
+    # (namespace-qualified, e.g. `tnoff/discord_bot`).
+    cleanup_repo: str
+
+    def __post_init__(self):
+        if not self.enable_scan and not self.enable_cleanup:
+            raise ValueError("At least one of ENABLE_SCAN / ENABLE_CLEANUP must be true")
+        if self.cleanup_repo and not self.enable_cleanup:
+            raise ValueError("CLEANUP_REPO is set but ENABLE_CLEANUP=false — nothing will use it")
+
     @classmethod
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
@@ -58,4 +73,9 @@ class Config:
             ocir_cleanup_keep_count=int(os.getenv("OCIR_CLEANUP_KEEP_COUNT", "5")),
             # Comma separated list of extra repos (filter empties so unset → [])
             ocir_extra_repositories=[r for r in os.getenv('OCIR_EXTRA_REPOSITORIES', "").split(',') if r],
+
+            # Phase toggles (default both on — daily CronJob behavior)
+            enable_scan=os.getenv("ENABLE_SCAN", "true").lower() == "true",
+            enable_cleanup=os.getenv("ENABLE_CLEANUP", "true").lower() == "true",
+            cleanup_repo=os.getenv("CLEANUP_REPO", ""),
         )
