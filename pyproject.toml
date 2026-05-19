@@ -8,7 +8,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "kubernetes==35.0.0",
-    "oci==2.174.0",
+    "oci==2.175.0",
     "opentelemetry-api",
     "opentelemetry-sdk==1.41.1",
     "opentelemetry-exporter-otlp",
