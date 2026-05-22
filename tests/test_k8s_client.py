@@ -50,6 +50,51 @@ class TestKubernetesClient:
         mock_incluster.assert_called_once()
         mock_kubeconfig.assert_called_once()
 
+    @patch('src.k8s_client.client.CoreV1Api')
+    @patch('src.k8s_client.config.load_incluster_config')
+    def test_init_mirrors_authorization_to_bearertoken(self, mock_load_config, _mock_core_api, config, logger_provider):
+        """kubernetes==36 stores the bearer token under api_key['authorization'] but the
+        generated API methods look it up under 'BearerToken'. KubernetesClient.__init__
+        must mirror the value across so outgoing requests carry an Authorization header."""
+        from kubernetes import client as k8s_client_mod
+
+        original = k8s_client_mod.Configuration.get_default_copy()
+        try:
+            def populate_auth_like_v36():
+                cfg = k8s_client_mod.Configuration.get_default_copy()
+                cfg.api_key = {'authorization': 'bearer fake-token'}
+                k8s_client_mod.Configuration.set_default(cfg)
+            mock_load_config.side_effect = populate_auth_like_v36
+
+            KubernetesClient(config, logger_provider)
+
+            final = k8s_client_mod.Configuration.get_default_copy()
+            assert final.api_key.get('BearerToken') == 'bearer fake-token'
+            assert final.api_key.get('authorization') == 'bearer fake-token'
+        finally:
+            k8s_client_mod.Configuration.set_default(original)
+
+    @patch('src.k8s_client.client.CoreV1Api')
+    @patch('src.k8s_client.config.load_incluster_config')
+    def test_init_does_not_overwrite_existing_bearertoken(self, mock_load_config, _mock_core_api, config, logger_provider):
+        """If the loader already populated 'BearerToken' (e.g. on a future fixed client),
+        the mirror step must leave it alone."""
+        from kubernetes import client as k8s_client_mod
+
+        original = k8s_client_mod.Configuration.get_default_copy()
+        try:
+            def populate_both():
+                cfg = k8s_client_mod.Configuration.get_default_copy()
+                cfg.api_key = {'authorization': 'bearer old', 'BearerToken': 'bearer new'}
+                k8s_client_mod.Configuration.set_default(cfg)
+            mock_load_config.side_effect = populate_both
+
+            KubernetesClient(config, logger_provider)
+
+            assert k8s_client_mod.Configuration.get_default_copy().api_key['BearerToken'] == 'bearer new'
+        finally:
+            k8s_client_mod.Configuration.set_default(original)
+
     def test_get_namespaces_uses_configured_namespaces(self, k8s_client):
         """Test _get_namespaces returns configured namespaces."""
         namespaces = k8s_client._get_namespaces()

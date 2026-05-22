@@ -5,6 +5,17 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-05-22
+
+### Fixed
+
+- In-cluster auth broken after the `kubernetes` 35 → 36 bump (`27560cf`): v36's
+  `load_incluster_config()` stores the bearer token under
+  `Configuration.api_key['authorization']`, but the generated API methods look
+  it up under the `BearerToken` security-scheme key, so no `Authorization`
+  header was sent and every call 401'd. `KubernetesClient.__init__` now mirrors
+  the value across both keys after loading config.
+
 ## [0.2.4] - 2026-05-22
 
 ### Changed

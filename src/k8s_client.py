@@ -72,6 +72,16 @@ class KubernetesClient:
             config.load_kube_config()
             logger.info("Loaded kubeconfig from local environment")
 
+        # kubernetes==36.0.0 regression: load_*_config() stores the bearer
+        # token under api_key['authorization'], but the generated API methods
+        # look it up under the 'BearerToken' security-scheme key, so no
+        # Authorization header gets sent and every call 401s. Mirror the
+        # value across until upstream ships a fix.
+        default_cfg = client.Configuration.get_default_copy()
+        if default_cfg.api_key.get('authorization') and not default_cfg.api_key.get('BearerToken'):
+            default_cfg.api_key['BearerToken'] = default_cfg.api_key['authorization']
+            client.Configuration.set_default(default_cfg)
+
         self.core_v1 = client.CoreV1Api()
 
     def get_all_images(self) -> set[Image]:
