@@ -5,6 +5,33 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-05-25
+
+### Fixed
+
+- `DiscordNotifier.send_deletion_results` used to fall through to a generic
+  `## No images deleted` header when the deletion list was empty, dropping the
+  `is_orphaned` distinction. Back-to-back webhooks from the two cleanup phases
+  (old tags + orphan platform manifests) could then read like a contradiction
+  in Discord — one message says "Images Deleted" with a list, the next says
+  "No images deleted". Empty results now preserve the phase label
+  (`## No Orphan Intermediate Images Deleted` vs `## No Images Deleted`).
+
+### Changed
+
+- `RegistryClient.delete_ocir_images` now logs each delete (and each already-
+  absent skip) at INFO level so pod logs are self-contained instead of relying
+  on the Discord notification to know what happened.
+- `RegistryClient._get_manifest_list_sub_digests` now logs manifest-fetch
+  failures at INFO rather than DEBUG. The previous default-DEBUG made auth /
+  network problems against the registry's v2 API invisible in normal runs.
+- `RegistryClient.get_orphaned_manifests` reworded the safety-skip log:
+  `Could not resolve manifest lists for X` → `No referenced sub-manifests
+  found for X across N normal tags (likely all single-platform)`. The old
+  wording implied a failure; the common case is just that a repo's normal
+  tags are single-platform images with no manifest list to enumerate, in
+  which case there's nothing to compare orphan platform manifests against.
+
 ## [0.2.5] - 2026-05-22
 
 ### Fixed

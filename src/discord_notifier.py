@@ -135,7 +135,9 @@ class DiscordNotifier:
         if len(full_report_table):
             content = full_report_table.render()
         else:
-            content = ['## No images deleted\n']
+            empty_header = ('## No Orphan Intermediate Images Deleted\n'
+                            if is_orphaned else '## No Images Deleted\n')
+            content = [empty_header]
         self._send_message(content)
 
     def _send_file(self, message_content: str, file_contents: str, file_name: str):

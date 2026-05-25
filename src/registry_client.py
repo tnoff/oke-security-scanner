@@ -398,7 +398,7 @@ class RegistryClient:
                 manifests = data.get('manifests', [])
                 return {m['digest'] for m in manifests if 'digest' in m}
         except Exception as e:
-            logger.debug(f"Could not fetch manifest list for {image.full_name}: {e}")
+            logger.info(f"Could not fetch manifest list for {image.full_name}: {e}")
 
         return set()
 
@@ -520,9 +520,15 @@ class RegistryClient:
                 referenced_digests.update(sub_digests)
 
             if not referenced_digests:
-                # Could not resolve any manifest lists - skip to avoid deleting needed manifests
-                logger.info(f'Could not resolve manifest lists for {image.repo_name}, '
-                            f'skipping orphan detection')
+                # No normal tag yielded sub-manifest digests — either every tag is a
+                # single-platform image (no manifest list to enumerate) or all the
+                # manifest fetches failed. Either way, we can't safely tell which
+                # platform manifests are still referenced, so skip rather than risk
+                # deleting needed ones. Real fetch failures surface via the per-tag
+                # 'Could not fetch manifest list' log above.
+                logger.info(f'No referenced sub-manifests found for {image.repo_name} '
+                            f'across {len(normal_tags)} normal tags '
+                            f'(likely all single-platform); skipping orphan detection')
                 repo_names_processed.append(f'{image.registry}/{image.repo_name}')
                 continue
 
@@ -558,11 +564,13 @@ class RegistryClient:
 
         for item in cleanup_recommendations:
             for image in item.tags_to_delete:
+                tag_label = image.tag if image.tag != 'unknown' else image.digest
                 try:
                     self.artifacts_client.delete_container_image(image.ocid)
+                    logger.info(f'Deleted {image.repo_name}:{tag_label}')
                 except oci.exceptions.ServiceError as e:
                     if e.status == 404:
-                        logger.debug(f'Image {image.ocid} already deleted, skipping')
+                        logger.info(f'Already absent {image.repo_name}:{tag_label}, skipping')
                     else:
                         raise
                 images_deleted.append(image)

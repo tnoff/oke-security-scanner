@@ -111,7 +111,7 @@ class TestDiscordNotifier:
 
     @patch('src.discord_notifier.requests.post')
     def test_send_deletion_results_empty(self, mock_post, notifier, mock_dapper_table):
-        """Test sending empty deletion results."""
+        """Empty old-image cleanup results post the generic 'No Images Deleted' header."""
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
 
@@ -120,8 +120,23 @@ class TestDiscordNotifier:
 
         notifier.send_deletion_results([])
 
-        # Should still send a "no images deleted" message
-        assert mock_post.call_count >= 1
+        assert mock_post.call_count == 1
+        posted = mock_post.call_args.kwargs['json']['content']
+        assert posted == '## No Images Deleted\n'
+
+    @patch('src.discord_notifier.requests.post')
+    def test_send_deletion_results_empty_orphan(self, mock_post, notifier, mock_dapper_table):
+        """Empty orphan-pass results must keep the orphan-specific header, not collapse to the generic one."""
+        mock_post.return_value = Mock(status_code=200)
+        mock_post.return_value.raise_for_status = Mock()
+
+        mock_dapper_table.return_value.__len__.return_value = 0
+
+        notifier.send_deletion_results([], is_orphaned=True)
+
+        assert mock_post.call_count == 1
+        posted = mock_post.call_args.kwargs['json']['content']
+        assert posted == '## No Orphan Intermediate Images Deleted\n'
 
     @patch('src.discord_notifier.requests.post')
     def test_send_image_scan_report_shortens_dockerhub_failed_image(self, mock_post, notifier, mock_dapper_table):
