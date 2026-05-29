@@ -429,7 +429,15 @@ class RegistryClient:
         repo_names_processed = []
         extra_repositories = extra_repositories or []
         recommendations = []
+        # Skip extras for repos already represented by a real discovered image —
+        # the synthetic :latest entry would race the real one on set iteration
+        # order and, if visited first, marks the repo processed without ever
+        # protecting the deployed tag (it doesn't match :latest), so the
+        # deployed image can land in the deletion list.
+        existing_ocir_repos = {im.repo_name for im in images if im.is_ocir_image}
         for extra_repo in extra_repositories:
+            if extra_repo in existing_ocir_repos:
+                continue
             logger.info(f'Scanning extra repo {extra_repo} in old image scan')
             images.add(Image(f'{self.oci_registry}/{extra_repo}:latest'))
         for image in images:
@@ -491,7 +499,12 @@ class RegistryClient:
         repo_names_processed = []
         extra_repositories = extra_repositories or []
         recommendations = []
+        # See get_old_ocir_images: skip extras for repos already covered by a
+        # real discovered image to avoid set-order races.
+        existing_ocir_repos = {im.repo_name for im in images if im.is_ocir_image}
         for extra_repo in extra_repositories:
+            if extra_repo in existing_ocir_repos:
+                continue
             logger.info(f'Scanning extra repo {extra_repo} for orphaned manifests')
             images.add(Image(f'{self.oci_registry}/{extra_repo}:latest'))
         for image in images:

@@ -5,6 +5,22 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-05-28
+
+### Fixed
+
+- `RegistryClient.get_old_ocir_images` / `get_orphaned_manifests` unconditionally
+  added a synthetic `:latest` Image for every `extra_repositories` entry into the
+  same scan set as discovered pod images. When `CLEANUP_REPO` matched a real
+  deployed image, the resulting two-entry set was iterated in non-deterministic
+  order; if the synthetic visited first, the deployed tag wasn't excluded by the
+  `im.full_name != image.full_name` filter, fell into `filtered_images`, and got
+  selected for deletion once enough newer tags existed — then `repo_names_processed`
+  blocked the second iteration that would have protected it. Producers like
+  `cleanup-magic-mirror` could silently delete the deployed image's tag,
+  surfacing later as `ImagePullBackOff: manifest unknown` on the next pod
+  restart. Extras now skip any repo already represented by a real OCIR image.
+
 ## [0.2.8] - 2026-05-27
 
 ### Changed

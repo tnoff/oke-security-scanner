@@ -1542,6 +1542,58 @@ class TestRegistryClientCoverage:
         assert result == []
 
     @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_extras_skip_repo_already_in_images(self, mock_oci, config):
+        """Regression: when CLEANUP_REPO matches a real deployed image, the synthetic
+        `:latest` extras entry must not be added — otherwise set iteration order
+        decides whether the deployed tag gets protected, and on the unlucky order
+        the deployed tag lands in the deletion list.
+        """
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        client._oci_registry = 'iad.ocir.io'
+
+        deployed = Image('iad.ocir.io/ns/app:deployed-tag', digest='sha256:dep')
+        # 6 newer images so the deployed tag would be the 7th-oldest and, if it
+        # ever landed in `filtered_images`, would be selected for deletion under
+        # keep_count=5.
+        newer = [
+            Image(f'iad.ocir.io/ns/app:v{i}',
+                  created_at=datetime(2026, 1, i + 1, tzinfo=timezone.utc),
+                  digest=f'sha256:new{i}',
+                  ocid=f'ocid1.image.new{i}')
+            for i in range(6)
+        ]
+        deployed_in_registry = Image(
+            'iad.ocir.io/ns/app:deployed-tag',
+            created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            digest='sha256:dep',
+            ocid='ocid1.image.deployed',
+        )
+        sdk_response = [deployed_in_registry, *newer]
+        sdk_calls = []
+
+        def fake_sdk(img):
+            sdk_calls.append(img.full_name)
+            return sdk_response
+
+        images = {deployed}
+        with patch.object(client, '_get_ocir_images_via_sdk', side_effect=fake_sdk), \
+             patch.object(client, '_get_manifest_list_sub_digests', return_value=set()):
+            result = client.get_old_ocir_images(images, keep_count=5,
+                                                extra_repositories=['ns/app'])
+
+        # The deployed tag must never be in the deletion list, regardless of
+        # set iteration order.
+        deleted_tags = {im.tag for rec in result for im in rec.tags_to_delete}
+        assert 'deployed-tag' not in deleted_tags
+        # And the SDK should only ever be called once for the repo — the
+        # synthetic :latest entry must not get added when a real image already
+        # covers the repo.
+        assert len(sdk_calls) == 1
+        # `images` was not polluted with a synthetic `:latest` Image.
+        assert not any(im.tag == 'latest' for im in images)
+
+    @patch('src.registry_client.oci')
     def test_get_old_ocir_images_skips_already_processed_repo(self, mock_oci, config):
         """Two images for the same repo: the second is skipped via repo_names_processed.
 
@@ -1639,6 +1691,23 @@ class TestRegistryClientCoverage:
         with patch.object(client, '_get_ocir_images_via_sdk', return_value=[]):
             result = client.get_orphaned_manifests(set(), extra_repositories=['ns/extra'])
         assert result == []
+
+    @patch('src.registry_client.oci')
+    def test_get_orphaned_manifests_extras_skip_repo_already_in_images(self, mock_oci, config):
+        """Mirror of the get_old_ocir_images regression: an extras entry whose repo
+        is already covered by a real OCIR image in `images` must not add a synthetic
+        `:latest`. Same set-iteration-order hazard, same fix.
+        """
+        self._make_client(mock_oci)
+        client = RegistryClient(config)
+        client._oci_registry = 'iad.ocir.io'
+
+        deployed = Image('iad.ocir.io/ns/app:deployed-tag', digest='sha256:dep')
+        images = {deployed}
+        with patch.object(client, '_get_ocir_images_via_sdk', return_value=[]):
+            client.get_orphaned_manifests(images, extra_repositories=['ns/app'])
+
+        assert not any(im.tag == 'latest' for im in images)
 
     @patch('src.registry_client.oci')
     def test_get_orphaned_manifests_skips_already_processed_repo(self, mock_oci, config):
