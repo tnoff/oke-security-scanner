@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+from collections import defaultdict
 from logging import getLogger
 from typing import Optional
 from dataclasses import dataclass
@@ -429,6 +431,14 @@ class RegistryClient:
         repo_names_processed = []
         extra_repositories = extra_repositories or []
         recommendations = []
+
+        # Optional per-repo knobs sourced from config. Compiled once outside
+        # the loop. Empty string means the corresponding feature is off.
+        protect_re = (re.compile(self.cfg.cleanup_protect_tags_regex)
+                      if self.cfg.cleanup_protect_tags_regex else None)
+        group_re = (re.compile(self.cfg.cleanup_group_by_regex)
+                    if self.cfg.cleanup_group_by_regex else None)
+
         # Skip extras for repos already represented by a real discovered image —
         # the synthetic :latest entry would race the real one on set iteration
         # order and, if visited first, marks the repo processed without ever
@@ -451,19 +461,62 @@ class RegistryClient:
             normal_images = [im for im in all_images if 'unknown@sha256:' not in im.full_name]
             # Skip the 'latest' tag and the currently deployed image
             filtered_images = [im for im in normal_images if im.tag != 'latest' and im.full_name != image.full_name]
-            # Then sort so we can check against the keep count
-            filtered_images.sort(key=lambda im: im.created_at)
-            if len(filtered_images) <= keep_count:
-                continue
-            # Determine kept images (deployed + newest keep_count)
-            # Find the deployed image from all_images to get its digest
+
+            # CLEANUP_PROTECT_TAGS_REGEX: tags whose name fully matches are
+            # excluded from the deletion candidate pool entirely. Used to
+            # protect mutable "channel" tags that get overwritten on every
+            # build (e.g. ci-base-images' :3.11/:3.12/:3.13/:3.14).
+            if protect_re is not None:
+                protected_count = sum(1 for im in filtered_images
+                                      if im.tag and protect_re.fullmatch(im.tag))
+                if protected_count:
+                    filtered_images = [im for im in filtered_images
+                                       if not (im.tag and protect_re.fullmatch(im.tag))]
+                    logger.info(
+                        f'Protected {protected_count} tag(s) matching '
+                        f'CLEANUP_PROTECT_TAGS_REGEX in {image.repo_name}'
+                    )
+
+            # Determine kept images (deployed + newest keep_count [per group]).
             deployed_with_digest = next((im for im in all_images if im.full_name == image.full_name), image)
-            kept_images = [deployed_with_digest] + filtered_images[len(filtered_images) - keep_count:]
+            if group_re is not None:
+                # CLEANUP_GROUP_BY_REGEX: group remaining tags by the regex's
+                # first capture group and apply keep_count per-group, so heavy
+                # churn in one group can't push other groups' tags out of the
+                # keep window. Tags whose name doesn't match are treated as a
+                # single "_ungrouped" bucket and trimmed together.
+                groups = defaultdict(list)
+                for im in filtered_images:
+                    if not im.tag:
+                        groups['_ungrouped'].append(im)
+                        continue
+                    m = group_re.match(im.tag)
+                    key = m.group(1) if m else '_ungrouped'
+                    groups[key].append(im)
+                kept_images = [deployed_with_digest]
+                to_delete = []
+                for key, group_images in groups.items():
+                    group_images.sort(key=lambda im: im.created_at)
+                    if len(group_images) <= keep_count:
+                        kept_images.extend(group_images)
+                        continue
+                    kept_images.extend(group_images[len(group_images) - keep_count:])
+                    to_delete.extend(group_images[0:len(group_images) - keep_count])
+                if not to_delete:
+                    continue
+                filtered_images = to_delete
+            else:
+                # Sort so we can check against the keep count.
+                filtered_images.sort(key=lambda im: im.created_at)
+                if len(filtered_images) <= keep_count:
+                    continue
+                kept_images = [deployed_with_digest] + filtered_images[len(filtered_images) - keep_count:]
+                filtered_images = filtered_images[0:len(filtered_images) - keep_count]
+
             # Collect sub-manifest digests from kept images that are manifest lists
             protected_digests = set()
             for kept in kept_images:
                 protected_digests.update(self._get_manifest_list_sub_digests(kept))
-            filtered_images = filtered_images[0:len(filtered_images) - keep_count]
             # Remove images whose digest is referenced by a kept manifest list
             if protected_digests:
                 before_count = len(filtered_images)

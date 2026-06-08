@@ -97,8 +97,10 @@ All configuration is provided via Kubernetes secrets as environment variables:
 | `EXCLUDE_NAMESPACES` | No | `kube-system,...` | Namespaces to exclude |
 | `DISCORD_WEBHOOK_URL` | No | (disabled) | Discord webhook URL for scan notifications |
 | `OCIR_CLEANUP_ENABLED` | No | `false` | Enable automatic deletion of old OCIR commit hash tags |
-| `OCIR_CLEANUP_KEEP_COUNT` | No | `5` | Number of recent commit hash tags to keep per repository |
+| `OCIR_CLEANUP_KEEP_COUNT` | No | `5` | Number of recent commit hash tags to keep per repository (or per group, if `CLEANUP_GROUP_BY_REGEX` is set) |
 | `OCIR_EXTRA_REPOSITORIES` | No | `''` | Check extra repos for old images to remove |
+| `CLEANUP_PROTECT_TAGS_REGEX` | No | `''` | Tags whose name fully matches are excluded from the deletion pool. Used to protect mutable "channel" tags (e.g. `^\d+\.\d+$` for ci-base-images' `:3.X`). |
+| `CLEANUP_GROUP_BY_REGEX` | No | `''` | When set, the candidate pool is grouped by the first capture group and `keep_count` is applied per group. Prevents heavy churn in one group from pushing other groups' tags out of the keep window (e.g. `^(\d+\.\d+)` keeps the last N `:3.X-<sha>` per minor independently). |
 | `ENABLE_SCAN` | No | `true` | Run the Trivy vulnerability scan phase |
 | `ENABLE_CLEANUP` | No | `true` | Run the OCIR tag + orphan-manifest cleanup phase |
 | `CLEANUP_REPO` | No | `''` | Scope the cleanup phase to one OCIR repo (namespace-qualified, e.g. `tnoff/discord_bot`) |

@@ -22,6 +22,8 @@ def base_config():
         ocir_cleanup_enabled=False,
         ocir_cleanup_keep_count=5,
         ocir_extra_repositories=[],
+        cleanup_protect_tags_regex="",
+        cleanup_group_by_regex="",
         enable_scan=True,
         enable_cleanup=True,
         cleanup_repo="",

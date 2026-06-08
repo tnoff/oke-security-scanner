@@ -5,6 +5,24 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-07
+
+### Added
+
+- `CLEANUP_PROTECT_TAGS_REGEX`: tags whose name fully matches are excluded
+  from the deletion candidate pool entirely, regardless of `keep_count` or
+  creation date. Lets per-repo cleanup CronJobs protect mutable "channel"
+  tags that get overwritten on every build (e.g. ci-base-images'
+  `:3.11/:3.12/:3.13/:3.14`).
+- `CLEANUP_GROUP_BY_REGEX`: when set, the candidate pool is grouped by the
+  regex's first capture group and `keep_count` is applied per group. Heavy
+  churn in one group (e.g. lots of `:3.14-<sha>` rebuilds) can no longer
+  push other groups' tags out of the keep window. Empty (the default)
+  preserves the original "newest N across the whole repo" behavior.
+- Both knobs are passed through `Config` and validated at load time
+  (invalid regex → fail fast; group regex without a capture group → fail
+  fast).
+
 ## [0.2.11] - 2026-06-03
 
 ### Changed

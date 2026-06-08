@@ -424,6 +424,7 @@ class TestPhaseToggles:
             discord_webhook_url="",
             ocir_cleanup_enabled=True, ocir_cleanup_keep_count=5,
             ocir_extra_repositories=[],
+            cleanup_protect_tags_regex="", cleanup_group_by_regex="",
             enable_scan=True, enable_cleanup=True, cleanup_repo="",
         )
         defaults.update(overrides)

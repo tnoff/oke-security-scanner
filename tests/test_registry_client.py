@@ -499,6 +499,188 @@ class TestRegistryClient:
         assert 'old-tag' in deleted_tags
 
     @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_protect_tags_regex(self, mock_oci, base_config):
+        """CLEANUP_PROTECT_TAGS_REGEX excludes matching tags from the deletion pool."""
+        from dataclasses import replace
+        cfg = replace(base_config, cleanup_protect_tags_regex=r'^\d+\.\d+$')
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(cfg)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        # ci-base-images-shaped tags: mutable :3.X channels that should be
+        # protected even though they're "old" by created_at, plus several
+        # :3.X-<sha> immutables.
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            # Mutable channels — old created_at but must be protected
+            Image('test.ocir.io/testnamespace/myapp:3.11', ocid='m1', created_at=now - timedelta(days=100)),
+            Image('test.ocir.io/testnamespace/myapp:3.12', ocid='m2', created_at=now - timedelta(days=100)),
+            # Immutables — should be eligible for deletion under keep_count
+            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='i1', created_at=now - timedelta(days=10)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='i2', created_at=now - timedelta(days=9)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-ccc', ocid='i3', created_at=now - timedelta(days=8)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-ddd', ocid='i4', created_at=now - timedelta(days=1)),
+        ]
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+        images = [Image('test.ocir.io/testnamespace/myapp:latest')]
+
+        recommendations = client.get_old_ocir_images(images, keep_count=2)
+
+        assert len(recommendations) == 1
+        deleted_tags = {im.tag for im in recommendations[0].tags_to_delete}
+        # Mutable channels are protected by the regex
+        assert '3.11' not in deleted_tags
+        assert '3.12' not in deleted_tags
+        # 4 immutables, keep_count=2 → 2 oldest get deleted
+        assert deleted_tags == {'3.11-aaa', '3.11-bbb'}
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_group_by_regex_tagless_image_goes_to_ungrouped(self, mock_oci, base_config):
+        """Tagless images (e.g. digest-only manifests) fall into the _ungrouped bucket.
+
+        Real OCIR data occasionally has images without a tag. The grouping
+        branch must handle them without throwing.
+        """
+        from dataclasses import replace
+        cfg = replace(
+            base_config,
+            cleanup_group_by_regex=r'^(\d+\.\d+)',
+        )
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(cfg)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='g1', created_at=now - timedelta(days=5)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='g2', created_at=now - timedelta(days=1)),
+        ]
+        # Three digest-only siblings — overwrite their .tag after construction
+        # so they survive the "must be present" check in __init__ but reach
+        # the grouping branch with tag=None.
+        for i in range(3):
+            tagless = Image(f'test.ocir.io/testnamespace/myapp:placeholder{i}',
+                            ocid=f'tl{i}', created_at=now - timedelta(days=40 - i))
+            tagless.tag = None
+            cached_images.append(tagless)
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+        images = [Image('test.ocir.io/testnamespace/myapp:latest')]
+
+        recommendations = client.get_old_ocir_images(images, keep_count=1)
+
+        # _ungrouped bucket: 3 tagless, keep 1 → 2 deleted.
+        # 3.11 group: 2 tagged, keep 1 → 1 deleted.
+        # Total: 3 deletion candidates.
+        assert len(recommendations) == 1
+        assert len(recommendations[0].tags_to_delete) == 3
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_group_by_regex_no_deletions(self, mock_oci, base_config):
+        """When every group is at or under keep_count, no recommendation is emitted."""
+        from dataclasses import replace
+        cfg = replace(
+            base_config,
+            cleanup_group_by_regex=r'^(\d+\.\d+)',
+        )
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(cfg)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='g1', created_at=now - timedelta(days=2)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='g2', created_at=now - timedelta(days=1)),
+            Image('test.ocir.io/testnamespace/myapp:3.12-aaa', ocid='g3', created_at=now - timedelta(days=2)),
+            Image('test.ocir.io/testnamespace/myapp:3.12-bbb', ocid='g4', created_at=now - timedelta(days=1)),
+        ]
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+        images = [Image('test.ocir.io/testnamespace/myapp:latest')]
+
+        # keep_count=5; both groups have only 2 entries → nothing to delete
+        recommendations = client.get_old_ocir_images(images, keep_count=5)
+
+        assert recommendations == []
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_group_by_regex_isolates_groups(self, mock_oci, base_config):
+        """CLEANUP_GROUP_BY_REGEX applies keep_count per capture group.
+
+        Heavy churn in one group must not push another group's tags out of
+        the keep window — this is the bug the per-group logic exists to
+        prevent.
+        """
+        from dataclasses import replace
+        cfg = replace(
+            base_config,
+            cleanup_protect_tags_regex=r'^\d+\.\d+$',
+            cleanup_group_by_regex=r'^(\d+\.\d+)',
+        )
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(cfg)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+
+        # 3.11 had a flurry of recent builds; 3.12 had a single older build.
+        # Without per-group logic, keep_count=2 globally would keep the
+        # two newest 3.11 tags and prune 3.12-only. The per-group logic
+        # must keep 3.12-only because it's the only tag in its group.
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image('test.ocir.io/testnamespace/myapp:3.11', ocid='m1', created_at=now - timedelta(days=1)),
+            Image('test.ocir.io/testnamespace/myapp:3.12', ocid='m2', created_at=now - timedelta(days=1)),
+            # 3.12: one older build, should be kept (sole occupant of its group)
+            Image('test.ocir.io/testnamespace/myapp:3.12-only', ocid='g1', created_at=now - timedelta(days=30)),
+            # 3.11: five recent builds, keep_count=2 → keep 2 newest, delete 3 oldest
+            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='g2', created_at=now - timedelta(days=10)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='g3', created_at=now - timedelta(days=9)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-ccc', ocid='g4', created_at=now - timedelta(days=8)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-ddd', ocid='g5', created_at=now - timedelta(days=2)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-eee', ocid='g6', created_at=now - timedelta(days=1)),
+        ]
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+        images = [Image('test.ocir.io/testnamespace/myapp:latest')]
+
+        recommendations = client.get_old_ocir_images(images, keep_count=2)
+
+        assert len(recommendations) == 1
+        deleted_tags = {im.tag for im in recommendations[0].tags_to_delete}
+        # 3.12 group: only 1 immutable, under keep_count, not deleted
+        assert '3.12-only' not in deleted_tags
+        # 3.11 group: 5 immutables, keep 2 newest (ddd, eee), delete 3 oldest
+        assert deleted_tags == {'3.11-aaa', '3.11-bbb', '3.11-ccc'}
+
+    @patch('src.registry_client.oci')
     def test_get_orphaned_manifests_basic(self, mock_oci, config):
         """Test orphan detection: platform manifests not referenced by any normal tag's manifest list are orphans."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}

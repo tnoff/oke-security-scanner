@@ -151,3 +151,37 @@ class TestConfig:
 
         with pytest.raises(ValueError, match="CLEANUP_REPO"):
             Config.from_env()
+
+    def test_cleanup_protect_tags_regex_invalid_raises(self, monkeypatch):
+        """Invalid CLEANUP_PROTECT_TAGS_REGEX is rejected at load time."""
+        monkeypatch.setenv("CLEANUP_PROTECT_TAGS_REGEX", "[unclosed")
+
+        with pytest.raises(ValueError, match="CLEANUP_PROTECT_TAGS_REGEX"):
+            Config.from_env()
+
+    def test_cleanup_group_by_regex_invalid_raises(self, monkeypatch):
+        """Invalid CLEANUP_GROUP_BY_REGEX is rejected at load time."""
+        monkeypatch.setenv("CLEANUP_GROUP_BY_REGEX", "(unclosed")
+
+        with pytest.raises(ValueError, match="CLEANUP_GROUP_BY_REGEX"):
+            Config.from_env()
+
+    def test_cleanup_group_by_regex_without_capture_group_raises(self, monkeypatch):
+        """CLEANUP_GROUP_BY_REGEX without a capture group is rejected.
+
+        The first capture group is the group key, so a regex with no
+        groups can't drive per-group keep_count.
+        """
+        monkeypatch.setenv("CLEANUP_GROUP_BY_REGEX", r"\d+\.\d+")
+
+        with pytest.raises(ValueError, match="capture group"):
+            Config.from_env()
+
+    def test_cleanup_regex_valid(self, monkeypatch):
+        """Valid protect + group regexes load without error."""
+        monkeypatch.setenv("CLEANUP_PROTECT_TAGS_REGEX", r"^\d+\.\d+$")
+        monkeypatch.setenv("CLEANUP_GROUP_BY_REGEX", r"^(\d+\.\d+)")
+
+        config = Config.from_env()
+        assert config.cleanup_protect_tags_regex == r"^\d+\.\d+$"
+        assert config.cleanup_group_by_regex == r"^(\d+\.\d+)"
