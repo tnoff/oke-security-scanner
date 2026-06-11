@@ -10,6 +10,7 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 | OCIR Image Cleanup | Yes | Deletes old OCIR tags beyond a configurable `keep_count`, while protecting the deployed tag, `latest`, and any multi-arch sub-manifest digests referenced by kept tags |
 | Orphan Manifest Cleanup | Yes | Detects and removes `unknown@sha256:...` platform manifests in OCIR whose digest is no longer referenced by any tagged manifest list |
 | Cache Management | No | Automatic cleanup of Trivy image cache after each scan to minimize disk usage |
+| Secret-age Tracker | Yes | Reports secrets ≥90 days old across OCI IAM credentials, Kubernetes Secrets (annotation-overridable), SealedSecrets in `docker-apps` (via GitLab blame), and operator-tracked admin tfvars (via a layer-1 ledger ConfigMap). Sibling package `src/secret_age/` with its own CronJob — see `docs/projects/secret-age-tracker.md`. Invoked as `python -m src.secret_age`. |
 
 ## Install and Usage
 

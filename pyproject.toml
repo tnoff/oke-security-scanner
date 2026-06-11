@@ -16,6 +16,9 @@ dependencies = [
     "opentelemetry-instrumentation-logging",
     "requests",
     "dappertable @ https://gitlab.com/tnoff-projects/dappertable/-/archive/v1.1.4/dappertable-v1.1.4.tar",
+    # Consumed by src/secret_age/readers/gitlab.py — blames docker-apps
+    # SealedSecret YAMLs and lists PAT expiries for rotation tracking.
+    "python-gitlab==6.4.0",
 ]
 
 [project.optional-dependencies]
