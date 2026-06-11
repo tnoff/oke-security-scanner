@@ -1,33 +1,33 @@
 include:
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/tag.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/discord-notify.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/renovate.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/trufflehog.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/trufflehog-image.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/bump-version.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/trigger-bump.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/buildkit-build-check.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/buildkit-docker-push.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: f94e713c3714277de4d131d29b9c4af9ab3ef10d
+    ref: e584647269b01de4e15a6ef4ddad67ab9c37d011
     file: '/gitlab/tox-pipeline.yml'
 
 default:
@@ -96,6 +96,14 @@ trufflehog-image:
 
 tox-generate:
   extends: .tox-generate
+  variables:
+    # Pre-baked CI base image (ci-base-images:3.X) ships git + ffmpeg +
+    # postgresql. ${CI_BASE_IMAGE_PATH} is the group-level plaintext var
+    # provisioned in terraform/infra/gitlab.tf and is expanded here at
+    # parent-pipeline time. $$ escapes the second dollar so ${PYTHON_VERSION}
+    # reaches tox-generate's heredoc literally; the child pipeline's
+    # parallel: matrix: then substitutes it per Python minor at runtime.
+    TOX_BASE_IMAGE: '${CI_BASE_IMAGE_PATH}:$${PYTHON_VERSION}'
 
 tox-pipeline:
   extends: .tox-pipeline
