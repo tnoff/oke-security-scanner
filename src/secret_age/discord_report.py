@@ -73,4 +73,7 @@ def _table(title: str, findings: list[Finding], show_age: bool = True):
         if show_age:
             row.append(str(f.age_days) if f.age_days is not None else "—")
         table.add_row(row)
-    yield from table.get_pages()
+    # `.render()` returns a list of paginated string chunks already wrapped
+    # in the enclosure marks. `.get_pages()` returns DapperRow objects which
+    # aren't JSON-serializable.
+    yield from table.render()

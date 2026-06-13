@@ -74,8 +74,8 @@ def test_format_chunks_emits_unknown_table_without_age():
     assert any("Unknown" in c or "set on next rotation" in c for c in chunks)
 
 
-def test_table_truncates_long_identifiers():
-    long_id = "a" * 100
-    pages = list(_table("Test", [_fix(identifier=long_id, age=200, severity=Severity.ROTATE)]))
-    # DapperTable pages aren't bare strings; just confirm we got output
+def test_table_yields_string_chunks():
+    # render() returns strings, not DapperRow objects; chunks JSON-serialize.
+    pages = list(_table("Test", [_fix(identifier="x", age=200, severity=Severity.ROTATE)]))
     assert len(pages) >= 1
+    assert all(isinstance(p, str) for p in pages)
