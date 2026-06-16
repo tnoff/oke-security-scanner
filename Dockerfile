@@ -9,6 +9,20 @@ RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/
     sh -s -- -b /usr/local/bin ${TRIVY_VERSION}
 
 
+# Compiles Python deps that don't ship aarch64 wheels for the runtime Python
+# (e.g. crc32c, a transitive dep of oci 2.178+). build-essential stays here;
+# the runtime stage copies only the installed packages out of /install.
+FROM python:3.14-slim AS py-builder
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY pyproject.toml .
+RUN pip install --no-cache-dir --prefix=/install .
+
+
 FROM python:3.14-slim
 
 # Apply security upgrades only; no build tools needed in the final image.
@@ -19,11 +33,10 @@ RUN apt-get update && \
 # Copy the trivy binary from the builder stage
 COPY --from=trivy-builder /usr/local/bin/trivy /usr/local/bin/trivy
 
-WORKDIR /app
+# Copy Python deps installed in the py-builder stage
+COPY --from=py-builder /install /usr/local
 
-# Install Python dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+WORKDIR /app
 
 # Copy application code
 COPY src/ ./src/
