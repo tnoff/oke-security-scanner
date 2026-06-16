@@ -1,12 +1,13 @@
 """Tests for readers.k8s — enumerates k8s Secrets, prefers annotation."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from src.secret_age.finding import Severity
 from src.secret_age.readers.k8s import (
-    read_findings, _grade, _to_date, ANNOTATION_KEY, SENTINEL, _SKIP_SECRET_TYPES,
+    read_findings, _grade, _to_date, ANNOTATION_KEY, EXPIRES_ANNOTATION,
+    SENTINEL, _SKIP_SECRET_TYPES,
 )
 
 
@@ -113,6 +114,69 @@ def test_read_findings_malformed_annotation_skipped(cfg):
 def test_to_date_fallback_on_unknown_type():
     # Intentionally pass something neither datetime nor str → today
     assert _to_date(12345) is not None
+
+
+def _run(cfg, secrets):
+    with patch("src.secret_age.readers.k8s.k8s_config") as kc, \
+         patch("src.secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
+        kc.load_incluster_config.return_value = None
+        kc.ConfigException = Exception
+        return read_findings(cfg)
+
+
+def _expiry_findings(findings):
+    return [f for f in findings if f.identifier.endswith("[expiry]")]
+
+
+def test_expiry_annotation_warns_within_window(cfg):
+    # Fresh rotation (OK) but expiry 30 days out → a separate WARN expiry finding.
+    today = datetime.now(timezone.utc).date()
+    soon = (today + timedelta(days=30)).isoformat()
+    secrets = [_secret(
+        "flux-system-https", "flux-system",
+        annotations={ANNOTATION_KEY: today.isoformat(), EXPIRES_ANNOTATION: soon},
+    )]
+    exp = _expiry_findings(_run(cfg, secrets))
+    assert len(exp) == 1
+    assert exp[0].severity == Severity.WARN
+    # reader computes "today" after the test, so 29 or 30 days remain.
+    assert exp[0].age_days in (29, 30)
+    assert "expiry" in exp[0].notes.lower()
+
+
+def test_expiry_annotation_rotate_when_past(cfg):
+    today = datetime.now(timezone.utc).date()
+    past = (today - timedelta(days=5)).isoformat()
+    secrets = [_secret(
+        "flux-system-https", "flux-system",
+        annotations={ANNOTATION_KEY: today.isoformat(), EXPIRES_ANNOTATION: past},
+    )]
+    exp = _expiry_findings(_run(cfg, secrets))
+    assert len(exp) == 1
+    assert exp[0].severity == Severity.ROTATE
+    assert exp[0].age_days <= 0
+
+
+def test_expiry_annotation_ignored_when_far_out(cfg):
+    # Expiry well beyond the warn window → no expiry finding (rotation one still emitted).
+    today = datetime.now(timezone.utc).date()
+    far = (today + timedelta(days=365)).isoformat()
+    secrets = [_secret(
+        "flux-system-https", "flux-system",
+        annotations={ANNOTATION_KEY: today.isoformat(), EXPIRES_ANNOTATION: far},
+    )]
+    findings = _run(cfg, secrets)
+    assert _expiry_findings(findings) == []
+    assert len(findings) == 1  # only the rotation-age finding
+
+
+def test_expiry_annotation_sentinel_and_malformed_ignored(cfg):
+    today = datetime.now(timezone.utc).date()
+    secrets = [
+        _secret("a", "ns", annotations={ANNOTATION_KEY: today.isoformat(), EXPIRES_ANNOTATION: SENTINEL}),
+        _secret("b", "ns", annotations={ANNOTATION_KEY: today.isoformat(), EXPIRES_ANNOTATION: "not-a-date"}),
+    ]
+    assert _expiry_findings(_run(cfg, secrets)) == []
 
 
 def test_read_findings_kubeconfig_fallback(cfg):

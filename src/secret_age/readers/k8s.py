@@ -21,6 +21,7 @@ from ..finding import Finding, Layer, Severity
 logger = getLogger(__name__)
 
 ANNOTATION_KEY = "secret-age-tracker.tnoff/last-rotated"
+EXPIRES_ANNOTATION = "secret-age-tracker.tnoff/expires-at"
 SENTINEL = "unknown"
 
 # K8s system Secrets — service-account tokens, helm releases, sealed-secrets
@@ -49,6 +50,48 @@ def _to_date(ts) -> date:
     return date.today()
 
 
+def _expiry_finding(s, annotations: dict, today: date, cfg: SecretAgeConfig) -> "Finding | None":
+    """Build a days-to-expiry Finding for a Secret carrying the
+    `secret-age-tracker.tnoff/expires-at` annotation.
+
+    This is the *expiry* side of a credential, distinct from rotation age:
+    some terraform-managed Secrets wrap a value with a hard,
+    provider-enforced expiry (e.g. the Flux deploy token, which GitLab
+    fails closed on — Flux stops reconciling once it lapses). terraform
+    stamps the expiry as an annotation; we surface it here.
+
+    Returns None when the annotation is absent, the sentinel, malformed,
+    or the expiry is still further out than the warn window. age_days is
+    days-until-expiry (negative once expired), mirroring the GitLab
+    PAT-expiry convention in readers.gitlab.
+    """
+    raw = annotations.get(EXPIRES_ANNOTATION)
+    if not raw or raw == SENTINEL:
+        return None
+    try:
+        expires = _to_date(raw)
+    except ValueError:
+        logger.warning(
+            "K8s Secret %s/%s has malformed %s annotation %r — skipping expiry",
+            s.metadata.namespace, s.metadata.name, EXPIRES_ANNOTATION, raw,
+        )
+        return None
+
+    days_left = (expires - today).days
+    if days_left > cfg.warn_days:
+        return None  # not yet worth surfacing
+
+    return Finding(
+        layer=Layer.K8S_SECRET,
+        identifier=f"{s.metadata.name} ({s.metadata.namespace}/) [expiry]",
+        last_rotated=expires,
+        age_days=days_left,
+        severity=Severity.ROTATE if days_left <= 0 else Severity.WARN,
+        rotation_command="See runbooks/secret-rotation.md (Cluster bootstrap: Flux)",
+        notes=f"Provider-enforced expiry {expires.isoformat()} ({days_left} days from now)",
+    )
+
+
 def read_findings(cfg: SecretAgeConfig) -> list[Finding]:
     """Enumerate K8s Secrets and emit a Finding per non-system secret."""
     try:
@@ -70,6 +113,13 @@ def read_findings(cfg: SecretAgeConfig) -> list[Finding]:
 
         annotations = s.metadata.annotations or {}
         annotated = annotations.get(ANNOTATION_KEY)
+
+        # Expiry side is independent of rotation age and emitted in addition
+        # to the rotation finding below — a Secret can be freshly rotated yet
+        # still be approaching a hard provider-enforced expiry.
+        expiry = _expiry_finding(s, annotations, today, cfg)
+        if expiry is not None:
+            findings.append(expiry)
 
         if annotated == SENTINEL:
             # Initial-seed sentinel — surface for the operator to fill in.
