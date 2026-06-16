@@ -5,6 +5,19 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-15
+
+### Added
+
+- `DISCORD_CLEANUP_WEBHOOK_URL`: optional separate webhook for cleanup
+  chatter (`send_cleanup_recommendations` + `send_deletion_results`). When
+  unset, cleanup falls back to `DISCORD_WEBHOOK_URL` so existing deploys
+  keep working unchanged. Lets the daily Trivy scan and the per-push /
+  Sunday OCIR cleanup output land in separate Discord channels. The
+  secret-age tracker is a separate entrypoint and routes via its own
+  `DISCORD_WEBHOOK_URL` value set at the manifest level — no scanner-side
+  change needed there.
+
 ## [0.3.1] - 2026-06-14
 
 ### Changed

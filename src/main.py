@@ -169,16 +169,17 @@ def main():
 
     try:
         meter_provider, logger_provider, scanner_metrics = setup_otel(config)
-        notifier = DiscordNotifier(config.discord_webhook_url) if config.discord_webhook_url else None
+        scan_notifier = DiscordNotifier(config.discord_webhook_url) if config.discord_webhook_url else None
+        cleanup_notifier = DiscordNotifier(config.discord_cleanup_webhook_url) if config.discord_cleanup_webhook_url else None
 
         discovered_images = None
         if config.enable_scan:
-            discovered_images = run_scan(config, logger_provider, scanner_metrics, notifier)
+            discovered_images = run_scan(config, logger_provider, scanner_metrics, scan_notifier)
         else:
             logger.info("ENABLE_SCAN=false — skipping Trivy scan phase")
 
         if config.enable_cleanup:
-            run_cleanup(config, logger_provider, notifier, discovered_images)
+            run_cleanup(config, logger_provider, cleanup_notifier, discovered_images)
         else:
             logger.info("ENABLE_CLEANUP=false — skipping OCIR cleanup phase")
 

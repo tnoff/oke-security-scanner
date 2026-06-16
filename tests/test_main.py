@@ -67,6 +67,7 @@ class TestMain:
         # Setup config
         mock_config = Mock()
         mock_config.discord_webhook_url = ""
+        mock_config.discord_cleanup_webhook_url = ""
         mock_config.ocir_cleanup_enabled = False
         mock_config.ocir_cleanup_keep_count = 5
         mock_config.ocir_extra_repositories = []
@@ -132,6 +133,7 @@ class TestMain:
         # Setup config with discord URL
         mock_config = Mock()
         mock_config.discord_webhook_url = "https://discord.com/webhook"
+        mock_config.discord_cleanup_webhook_url = "https://discord.com/webhook"
         mock_config.ocir_cleanup_enabled = False
         mock_config.ocir_cleanup_keep_count = 5
         mock_config.ocir_extra_repositories = []
@@ -191,6 +193,7 @@ class TestMain:
         """When cleanup is enabled, send_cleanup_recommendations is skipped and send_deletion_results is sent."""
         mock_config = Mock()
         mock_config.discord_webhook_url = "https://discord.com/webhook"
+        mock_config.discord_cleanup_webhook_url = "https://discord.com/webhook"
         mock_config.ocir_cleanup_enabled = True
         mock_config.ocir_cleanup_keep_count = 5
         mock_config.ocir_extra_repositories = []
@@ -249,6 +252,7 @@ class TestMain:
         """When cleanup is disabled, send_cleanup_recommendations is sent and send_deletion_results is skipped."""
         mock_config = Mock()
         mock_config.discord_webhook_url = "https://discord.com/webhook"
+        mock_config.discord_cleanup_webhook_url = "https://discord.com/webhook"
         mock_config.ocir_cleanup_enabled = False
         mock_config.ocir_cleanup_keep_count = 5
         mock_config.ocir_extra_repositories = []
@@ -305,6 +309,7 @@ class TestMain:
         # Setup config
         mock_config = Mock()
         mock_config.discord_webhook_url = ""
+        mock_config.discord_cleanup_webhook_url = ""
         mock_config.enable_scan = True
         mock_config.enable_cleanup = True
         mock_config.cleanup_repo = ""
@@ -370,6 +375,7 @@ class TestMain:
 
         mock_config = Mock()
         mock_config.discord_webhook_url = ""
+        mock_config.discord_cleanup_webhook_url = ""
         mock_config.ocir_cleanup_enabled = True
         mock_config.ocir_cleanup_keep_count = 5
         mock_config.ocir_extra_repositories = []
@@ -422,6 +428,7 @@ class TestPhaseToggles:
             trivy_severity="CRITICAL,HIGH", trivy_timeout=300, trivy_platform="",
             namespaces=[], exclude_namespaces=[],
             discord_webhook_url="",
+            discord_cleanup_webhook_url="",
             ocir_cleanup_enabled=True, ocir_cleanup_keep_count=5,
             ocir_extra_repositories=[],
             cleanup_protect_tags_regex="", cleanup_group_by_regex="",
@@ -549,6 +556,7 @@ class TestPhaseToggles:
         """ENABLE_SCAN=false: TrivyScanner is never constructed but cleanup still runs."""
         mock_config = Mock()
         mock_config.discord_webhook_url = ""
+        mock_config.discord_cleanup_webhook_url = ""
         mock_config.ocir_cleanup_enabled = False
         mock_config.ocir_cleanup_keep_count = 5
         mock_config.ocir_extra_repositories = []
@@ -590,6 +598,7 @@ class TestPhaseToggles:
         """ENABLE_CLEANUP=false: RegistryClient is never constructed but scan still runs."""
         mock_config = Mock()
         mock_config.discord_webhook_url = ""
+        mock_config.discord_cleanup_webhook_url = ""
         mock_config.ocir_cleanup_enabled = False
         mock_config.ocir_cleanup_keep_count = 5
         mock_config.ocir_extra_repositories = []

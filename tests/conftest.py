@@ -19,6 +19,7 @@ def base_config():
         namespaces=[],
         exclude_namespaces=["kube-system", "kube-public"],
         discord_webhook_url="",
+        discord_cleanup_webhook_url="",
         ocir_cleanup_enabled=False,
         ocir_cleanup_keep_count=5,
         ocir_extra_repositories=[],

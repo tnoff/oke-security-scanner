@@ -24,8 +24,13 @@ class Config:
     namespaces: list[str]
     exclude_namespaces: list[str]
 
-    # Discord webhook configuration (optional - enabled if URL provided)
+    # Discord webhook configuration (optional - enabled if URL provided).
+    # `discord_webhook_url` receives scan reports (send_image_scan_report).
+    # `discord_cleanup_webhook_url` receives cleanup chatter
+    # (send_cleanup_recommendations + send_deletion_results); falls back to
+    # `discord_webhook_url` when unset so existing deploys keep working.
     discord_webhook_url: str
+    discord_cleanup_webhook_url: str
 
     # OCIR cleanup configuration
     ocir_cleanup_enabled: bool
@@ -80,6 +85,7 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         """Load configuration from environment variables."""
+        discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")
         return cls(
             # OTLP configuration
             otlp_endpoint=os.getenv("OTLP_ENDPOINT", "http://localhost:4317"),
@@ -97,7 +103,8 @@ class Config:
             exclude_namespaces=os.getenv("EXCLUDE_NAMESPACES", "kube-system,kube-public,kube-node-lease").split(","),
 
             # Discord webhook configuration (optional - enabled if URL provided)
-            discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", ""),
+            discord_webhook_url=discord_webhook_url,
+            discord_cleanup_webhook_url=os.getenv("DISCORD_CLEANUP_WEBHOOK_URL", "") or discord_webhook_url,
 
             # OCIR cleanup configuration
             ocir_cleanup_enabled=os.getenv("OCIR_CLEANUP_ENABLED", "false").lower() == "true",

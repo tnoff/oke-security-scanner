@@ -70,6 +70,25 @@ class TestConfig:
         """Test that Discord webhook URL is empty by default."""
         config = Config.from_env()
         assert config.discord_webhook_url == ""
+        assert config.discord_cleanup_webhook_url == ""
+
+    def test_discord_cleanup_webhook_url_falls_back_to_scan_url(self, monkeypatch):
+        """DISCORD_CLEANUP_WEBHOOK_URL unset → cleanup uses the scan URL.
+
+        Backward-compat for deploys that haven't wired the split yet.
+        """
+        monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/scan")
+        config = Config.from_env()
+        assert config.discord_webhook_url == "https://discord.com/api/webhooks/scan"
+        assert config.discord_cleanup_webhook_url == "https://discord.com/api/webhooks/scan"
+
+    def test_discord_cleanup_webhook_url_overrides_scan_url(self, monkeypatch):
+        """DISCORD_CLEANUP_WEBHOOK_URL set → cleanup uses it independently of the scan URL."""
+        monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/scan")
+        monkeypatch.setenv("DISCORD_CLEANUP_WEBHOOK_URL", "https://discord.com/api/webhooks/cleanup")
+        config = Config.from_env()
+        assert config.discord_webhook_url == "https://discord.com/api/webhooks/scan"
+        assert config.discord_cleanup_webhook_url == "https://discord.com/api/webhooks/cleanup"
 
     def test_otlp_metrics_enabled(self, monkeypatch):
         """Test OTLP_METRICS_ENABLED=true."""

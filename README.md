@@ -97,6 +97,7 @@ All configuration is provided via Kubernetes secrets as environment variables:
 | `SCAN_NAMESPACES` | No | (all) | Comma-separated namespaces to scan |
 | `EXCLUDE_NAMESPACES` | No | `kube-system,...` | Namespaces to exclude |
 | `DISCORD_WEBHOOK_URL` | No | (disabled) | Discord webhook URL for scan notifications |
+| `DISCORD_CLEANUP_WEBHOOK_URL` | No | (falls back to `DISCORD_WEBHOOK_URL`) | Separate webhook for cleanup recommendations / deletion results. Set this to route cleanup chatter to a dedicated channel. |
 | `OCIR_CLEANUP_ENABLED` | No | `false` | Enable automatic deletion of old OCIR commit hash tags |
 | `OCIR_CLEANUP_KEEP_COUNT` | No | `5` | Number of recent commit hash tags to keep per repository (or per group, if `CLEANUP_GROUP_BY_REGEX` is set) |
 | `OCIR_EXTRA_REPOSITORIES` | No | `''` | Check extra repos for old images to remove |
@@ -149,4 +150,4 @@ To enable OCIR cleanup, the OCI user/principal must have the `manage repos in co
 
 Console logs are enabled by default; logs and metrics can additionally be exported via OTLP (tracing is not wired in).
 
-Setting `DISCORD_WEBHOOK_URL` enables Discord notifications for the scan report, cleanup recommendations / results, and orphan-manifest deletions.
+Setting `DISCORD_WEBHOOK_URL` enables Discord notifications for the scan report, cleanup recommendations / results, and orphan-manifest deletions. Set `DISCORD_CLEANUP_WEBHOOK_URL` to route the cleanup messages (recommendations + deletion results) to a different channel — when unset, cleanup falls back to the scan URL.
