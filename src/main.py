@@ -119,11 +119,18 @@ def run_cleanup(
         images, keep_count=config.ocir_cleanup_keep_count,
         extra_repositories=extras,
     )
+    # The scan augments `images` in place with the configured extras; union the
+    # extras explicitly too so the per-repo "nothing deleted" report stays
+    # complete regardless of that in-place augmentation.
+    scanned_repos = {f'{im.registry}/{im.repo_name}' for im in images if im.is_ocir_image}
+    scanned_repos.update(f'{registry_client.oci_registry}/{extra}' for extra in extras)
+    scanned_repos = sorted(scanned_repos)
+
     if config.ocir_cleanup_enabled:
         deletion_results = registry_client.delete_ocir_images(cleanup_recommendations)
         if notifier:
             logger.debug("Sending Discord webhook notification...")
-            notifier.send_deletion_results(deletion_results)
+            notifier.send_deletion_results(deletion_results, scanned_repos)
     elif notifier:
         logger.debug("Sending Discord webhook notification...")
         notifier.send_cleanup_recommendations(cleanup_recommendations)
@@ -141,7 +148,7 @@ def run_cleanup(
             logger.info(f"Deleted {len(orphans_deleted)} orphaned platform manifests")
         if notifier:
             logger.debug("Sending Discord webhook notification...")
-            notifier.send_deletion_results(orphans_deleted, is_orphaned=True)
+            notifier.send_deletion_results(orphans_deleted, scanned_repos, is_orphaned=True)
 
 def main():
     """Run the security scanner."""

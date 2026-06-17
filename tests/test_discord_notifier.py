@@ -96,7 +96,7 @@ class TestDiscordNotifier:
 
     @patch('src.discord_notifier.requests.post')
     def test_send_deletion_results(self, mock_post, notifier, mock_dapper_table):
-        """Test sending deletion results."""
+        """Deleted tags are grouped under their repo with a count and code block."""
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
 
@@ -107,36 +107,93 @@ class TestDiscordNotifier:
 
         notifier.send_deletion_results(deleted_images)
 
-        assert mock_post.call_count >= 1
+        posted = '\n'.join(c.kwargs['json']['content'] for c in mock_post.call_args_list)
+        assert '## Images Deleted' in posted
+        assert 'Deleted 2 app images:' in posted
+        assert 'old1' in posted and 'old2' in posted
 
     @patch('src.discord_notifier.requests.post')
     def test_send_deletion_results_empty(self, mock_post, notifier, mock_dapper_table):
-        """Empty old-image cleanup results post the generic 'No Images Deleted' header."""
+        """With nothing scanned or deleted, post a plain 'no images' line, not a heading."""
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
-
-        # Set size to 0 to simulate empty table
-        mock_dapper_table.return_value.__len__.return_value = 0
 
         notifier.send_deletion_results([])
 
         assert mock_post.call_count == 1
         posted = mock_post.call_args.kwargs['json']['content']
-        assert posted == '## No Images Deleted\n'
+        assert posted == 'No images were deleted.'
 
     @patch('src.discord_notifier.requests.post')
     def test_send_deletion_results_empty_orphan(self, mock_post, notifier, mock_dapper_table):
-        """Empty orphan-pass results must keep the orphan-specific header, not collapse to the generic one."""
+        """Empty orphan-pass results keep the orphan-specific wording, no heading."""
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
-
-        mock_dapper_table.return_value.__len__.return_value = 0
 
         notifier.send_deletion_results([], is_orphaned=True)
 
         assert mock_post.call_count == 1
         posted = mock_post.call_args.kwargs['json']['content']
-        assert posted == '## No Orphan Intermediate Images Deleted\n'
+        assert posted == 'No orphan intermediate images were deleted.'
+
+    @patch('src.discord_notifier.requests.post')
+    def test_send_deletion_results_names_clean_repos(self, mock_post, notifier, mock_dapper_table):
+        """Scanned repos with no deletions get an explicit per-repo 'No <repo>' line."""
+        mock_post.return_value = Mock(status_code=200)
+        mock_post.return_value.raise_for_status = Mock()
+
+        notifier.send_deletion_results(
+            [Image("test.ocir.io/ns/hathor:v1.2")],
+            scanned_repos=[
+                "test.ocir.io/ns/hathor",
+                "test.ocir.io/ns/discord-bot",
+            ],
+        )
+
+        posted = '\n'.join(c.kwargs['json']['content'] for c in mock_post.call_args_list)
+        assert 'Deleted 1 hathor image:' in posted
+        assert 'No discord-bot images deleted.' in posted
+
+    @patch('src.discord_notifier.requests.post')
+    def test_send_deletion_results_all_clean_has_no_heading(self, mock_post, notifier, mock_dapper_table):
+        """When scanned repos are all clean, list per-repo lines without a heading."""
+        mock_post.return_value = Mock(status_code=200)
+        mock_post.return_value.raise_for_status = Mock()
+
+        notifier.send_deletion_results(
+            [],
+            scanned_repos=["test.ocir.io/ns/discord-bot"],
+        )
+
+        posted = '\n'.join(c.kwargs['json']['content'] for c in mock_post.call_args_list)
+        assert posted == 'No discord-bot images deleted.'
+        assert '## Images Deleted' not in posted
+
+    @patch('src.discord_notifier.requests.post')
+    def test_send_deletion_results_paginates_and_splits_large_repo(self, mock_post, notifier, mock_dapper_table):
+        """Output over the message limit splits across messages, and a repo with
+        too many tags for one code block spills into a '(continued)' block."""
+        mock_post.return_value = Mock(status_code=200)
+        mock_post.return_value.raise_for_status = Mock()
+
+        # Shrink the limit so a small fixture exercises both the per-repo
+        # code-block split and the cross-message packing.
+        notifier.max_length = 40
+
+        notifier.send_deletion_results([
+            Image("test.ocir.io/ns/app:aaaa"),
+            Image("test.ocir.io/ns/app:bbbb"),
+            Image("test.ocir.io/ns/app:cccc"),
+        ])
+
+        # Multiple webhook posts (heading + split blocks couldn't share one msg).
+        assert mock_post.call_count > 1
+        posted = '\n'.join(c.kwargs['json']['content'] for c in mock_post.call_args_list)
+        assert 'Deleted 3 app images:' in posted
+        assert '(continued)' in posted
+        assert 'aaaa' in posted and 'cccc' in posted
+        # No single message exceeded the (shrunken) limit's block budget.
+        assert all(len(c.kwargs['json']['content']) for c in mock_post.call_args_list)
 
     @patch('src.discord_notifier.requests.post')
     def test_send_image_scan_report_shortens_dockerhub_failed_image(self, mock_post, notifier, mock_dapper_table):
@@ -159,8 +216,8 @@ class TestDiscordNotifier:
         assert ['iad.ocir.io/ns/app:v1.0.0'] in rows_added
 
     @patch('src.discord_notifier.requests.post')
-    def test_send_deletion_results_uses_orphan_prefix(self, mock_post, notifier, mock_dapper_table):
-        """is_orphaned=True selects the orphan-specific message prefix."""
+    def test_send_deletion_results_uses_orphan_heading(self, mock_post, notifier, mock_dapper_table):
+        """is_orphaned=True selects the orphan-specific heading and noun."""
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
 
@@ -169,12 +226,13 @@ class TestDiscordNotifier:
             is_orphaned=True,
         )
 
-        prefix_kwargs = [call.kwargs.get('prefix') for call in mock_dapper_table.call_args_list]
-        assert any(p and 'Orphan' in p for p in prefix_kwargs)
+        posted = '\n'.join(c.kwargs['json']['content'] for c in mock_post.call_args_list)
+        assert '## Orphan Intermediate Images Deleted' in posted
+        assert 'Deleted 1 app orphan intermediate image:' in posted
 
     @patch('src.discord_notifier.requests.post')
     def test_send_deletion_results_substitutes_digest_for_unknown_tag(self, mock_post, notifier, mock_dapper_table):
-        """When an image's tag is 'unknown', the row uses its digest instead."""
+        """When an image's tag is 'unknown', the code block uses its digest instead."""
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
 
@@ -184,5 +242,5 @@ class TestDiscordNotifier:
         )
         notifier.send_deletion_results([img])
 
-        rows_added = [call.args[0] for call in mock_dapper_table.return_value.add_row.call_args_list]
-        assert ['test.ocir.io/ns/app', 'sha256:deadbeef'] in rows_added
+        posted = '\n'.join(c.kwargs['json']['content'] for c in mock_post.call_args_list)
+        assert 'sha256:deadbeef' in posted
