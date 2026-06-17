@@ -80,9 +80,10 @@ def test_read_findings_emits_findings_per_credential(cfg):
     assert len(findings) == 3
     layers = {f.layer for f in findings}
     assert layers == {Layer.OCI_IAM}
-    # Each rotation_command references either an OCI CLI command or a terraform replace
+    # OCI findings carry no rotation_command — rotation steps live in the
+    # runbook, and a fabricated command would risk terraform state drift.
     for f in findings:
-        assert "oci iam" in f.rotation_command or "terraform" in f.rotation_command
+        assert f.rotation_command == ""
 
 
 def test_read_findings_zero_creds_user(cfg):

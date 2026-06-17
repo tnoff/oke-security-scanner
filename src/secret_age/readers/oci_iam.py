@@ -16,6 +16,12 @@ from ..finding import Finding, Layer, Severity
 
 logger = getLogger(__name__)
 
+# OCI IAM findings carry no rotation_command. Most of these credentials are
+# terraform-managed, so any fabricated command (an `oci iam ...` CLI call in
+# particular) would rotate them outside terraform and cause state drift.
+# Rotation steps live in the runbook (docs/runbooks/secret-rotation.md); the
+# report intentionally doesn't restate them.
+
 
 def _grade(age_days: int, cfg: SecretAgeConfig) -> Severity:
     if age_days >= cfg.rotate_days:
@@ -70,10 +76,7 @@ def _read_user(identity, user, today: date, cfg: SecretAgeConfig) -> list[Findin
             last_rotated=last,
             age_days=age,
             severity=_grade(age, cfg),
-            rotation_command=(
-                f"oci iam auth-token create --user-id {user.id} "
-                f"--description {tok.description!r}  # then delete the old one"
-            ),
+            rotation_command="",
             notes=f"OCID: {tok.id}",
         ))
 
@@ -87,10 +90,7 @@ def _read_user(identity, user, today: date, cfg: SecretAgeConfig) -> list[Findin
             last_rotated=last,
             age_days=age,
             severity=_grade(age, cfg),
-            rotation_command=(
-                "terraform apply -replace="
-                f"oci_identity_customer_secret_key.<resource>  # for user {user.name}"
-            ),
+            rotation_command="",
             notes=f"OCID: {key.id}",
         ))
 
@@ -104,10 +104,7 @@ def _read_user(identity, user, today: date, cfg: SecretAgeConfig) -> list[Findin
             last_rotated=last,
             age_days=age,
             severity=_grade(age, cfg),
-            rotation_command=(
-                f"oci iam api-key upload --user-id {user.id} "
-                f"--key-file <new.pub>  # then api-key delete the old fingerprint"
-            ),
+            rotation_command="",
             notes=f"Fingerprint: {ak.fingerprint}",
         ))
 
