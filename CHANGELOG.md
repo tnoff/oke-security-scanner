@@ -5,6 +5,31 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-06-16
+
+### Added
+
+- Secret-age tracker: full-detail CSV attachment on the weekly Discord
+  report (`YYYY-MM-DD.secret-ages.csv`). The monospace tables truncate
+  identifiers to 40 chars and drop `rotation_command`/`notes`/`last_rotated`
+  and the OK rows; the CSV carries one row per tracked secret with every
+  `Finding` field across all severities, sent via the same multipart
+  `_send_file` the vuln scanner uses.
+- Secret-age tracker: provider-enforced expiry surfacing. Any k8s Secret
+  carrying a `secret-age-tracker.tnoff/expires-at` annotation now also
+  yields a days-to-expiry finding (WARN inside the window, ROTATE once
+  past) alongside its rotation-age finding — fail-closed for credentials
+  with a hard expiry (e.g. the Flux HTTPS deploy token).
+
+### Removed
+
+- Secret-age tracker: dropped the fabricated per-credential rotation-command
+  hints from the OCI IAM reader. Most of those identities are
+  terraform-managed, so the synthesized `oci iam …` / `terraform apply
+  -replace=…` strings were misleading; rotation steps live in
+  `runbooks/secret-rotation.md` (the single source of truth). OCI findings
+  now carry no `rotation_command`.
+
 ## [0.4.0] - 2026-06-15
 
 ### Added
