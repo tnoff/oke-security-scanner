@@ -4,6 +4,9 @@ Modeled on src/discord_notifier.py — same 2000-char limit, same
 DapperTable styling for monospace tables.
 """
 
+import csv
+from datetime import datetime
+from io import StringIO
 from logging import getLogger
 
 from dappertable import DapperTable, Column, Columns, PaginationLength
@@ -33,6 +36,48 @@ def send_report(webhook_url: str, report: Report) -> None:
         resp = requests.post(webhook_url, json={"content": chunk}, timeout=15)
         resp.raise_for_status()
     logger.info("Sent %d Discord chunks", len(chunks))
+
+    # The monospace tables above truncate identifiers to 40 chars and drop
+    # rotation_command/notes/last_rotated entirely, and omit the OK rows. Attach
+    # a full-detail CSV alongside — same pattern as the vuln scanner's
+    # send_image_scan_report (see src/discord_notifier.py).
+    file_name = f'{datetime.now().strftime("%Y-%m-%d")}.secret-ages.csv'
+    _send_file(webhook_url, "## Full secret-age CSV report", _build_csv(report), file_name)
+    logger.info("Attached %s", file_name)
+
+
+def _build_csv(report: Report) -> str:
+    """Render every finding — all layers, all severities including OK — as CSV.
+
+    One row per tracked secret with the complete Finding detail the Discord
+    tables can't fit. Ordered most-urgent first: rotate → warn → unknown → ok
+    (the four severity buckets together cover every finding exactly once).
+    """
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Layer", "Identifier", "Last Rotated", "Age (days)",
+        "Severity", "Rotation Command", "Notes",
+    ])
+    for f in (*report.rotate_now, *report.warn, *report.unknown, *report.ok):
+        writer.writerow([
+            f.layer.value,
+            f.identifier,
+            f.last_rotated.isoformat() if f.last_rotated is not None else "",
+            f.age_days if f.age_days is not None else "",
+            f.severity.value,
+            f.rotation_command,
+            f.notes,
+        ])
+    return output.getvalue()
+
+
+def _send_file(webhook_url: str, message_content: str, file_contents: str, file_name: str) -> None:
+    """Attach a file to a Discord message via multipart/form-data."""
+    files = {"file": (file_name, file_contents, "text/csv")}
+    data = {"content": message_content}
+    resp = requests.post(webhook_url, data=data, files=files, timeout=15)
+    resp.raise_for_status()
 
 
 def _format_chunks(report: Report):
