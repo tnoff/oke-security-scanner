@@ -44,11 +44,15 @@ stages:
   - notify
   - renovate
 
-# Shared rules for the image-build + image-scan jobs. On MRs that don't touch
-# anything baked into the image (the Dockerfile, python package source under
-# src/, or deps), skip these jobs — they otherwise burn runner slots needed by
-# the tox matrix. Fork MRs keep the manual gate; default-branch builds always
-# run.
+# Shared rules for the pre-merge image-build + image-scan jobs (validate-docker,
+# trufflehog-image). They validate the image BEFORE merge, on MRs that touch
+# the image inputs. Skipped on cosmetic MRs (github-workflows ref bumps,
+# doc-only edits, renovate.json tweaks); fork MRs keep the manual gate.
+#
+# Deliberately NOT run on the default branch: there, docker-push already
+# rebuilds and pushes the image directly and in parallel, so a separate
+# build-check is just a redundant second build, and a post-push image scan
+# gates nothing (the image is already in the registry).
 .image-build-rules:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
@@ -58,7 +62,6 @@ stages:
         - Dockerfile
         - pyproject.toml
         - src/**/*
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
 
 bump-version:
   extends: .bump-version
