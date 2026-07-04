@@ -5,6 +5,18 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-07-04
+
+### Fixed
+
+- OCIR cleanup no longer deletes a tag that shares its manifest digest with a
+  kept/deployed tag. A byte-identical rebuild produces a commit-hash tag that
+  resolves to the same digest as `:latest`; because OCIR dates a container image
+  by when the digest first appeared, the fresh tag sorted "old" and was pruned by
+  OCID, destroying the shared manifest and breaking `:latest`
+  (`ImagePullBackOff: manifest unknown` on every runner using that image). Each
+  kept image's own digest is now protected, not just its sub-manifests.
+
 ## [0.5.3] - 2026-07-03
 
 ### Changed
