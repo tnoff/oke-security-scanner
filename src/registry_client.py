@@ -513,18 +513,28 @@ class RegistryClient:
                 kept_images = [deployed_with_digest] + filtered_images[len(filtered_images) - keep_count:]
                 filtered_images = filtered_images[0:len(filtered_images) - keep_count]
 
-            # Collect sub-manifest digests from kept images that are manifest lists
+            # Collect digests we must never delete: each kept image's OWN
+            # manifest digest, plus any sub-manifests it references as a
+            # manifest list. Protecting the kept tag's own digest guards the
+            # byte-identical-rebuild case: a fresh commit-hash tag can share
+            # :latest's (or the deployed image's) digest, and because OCIR dates
+            # a ContainerImage by when the digest first appeared it sorts "old"
+            # and lands in the delete pool — but deleting it by OCID destroys the
+            # shared manifest and breaks the kept tag. Same-digest siblings of a
+            # kept tag must stay.
             protected_digests = set()
             for kept in kept_images:
+                if kept.digest:
+                    protected_digests.add(kept.digest)
                 protected_digests.update(self._get_manifest_list_sub_digests(kept))
-            # Remove images whose digest is referenced by a kept manifest list
+            # Remove images that share a digest with (or are a sub-manifest of) a kept image
             if protected_digests:
                 before_count = len(filtered_images)
                 filtered_images = [im for im in filtered_images
                                    if not im.digest or im.digest not in protected_digests]
                 protected_count = before_count - len(filtered_images)
                 if protected_count:
-                    logger.info(f'Protected {protected_count} sub-manifest images from deletion in {image.repo_name}')
+                    logger.info(f'Protected {protected_count} image(s) sharing a digest with a kept tag in {image.repo_name}')
             if not filtered_images:
                 continue
             recommendations.append(CleanupRecommendation(image.registry, image.repo_name, filtered_images))

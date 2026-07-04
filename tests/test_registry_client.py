@@ -499,6 +499,61 @@ class TestRegistryClient:
         assert 'old-tag' in deleted_tags
 
     @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_protects_digest_shared_with_kept_tag(self, mock_oci, config):
+        """A byte-identical rebuild makes a commit-hash tag share :latest's
+        manifest digest. OCIR dates a ContainerImage by when the digest first
+        appeared, so the fresh tag sorts 'old' and lands in the delete pool —
+        but deleting it by OCID would destroy the shared manifest and break
+        :latest. Any tag sharing a kept tag's digest must be protected."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+        # Single-arch image: the top digest is not a manifest list, so no
+        # sub-manifests to enumerate. Avoids a live registry HTTP call.
+        client._get_manifest_list_sub_digests = Mock(return_value=set())
+
+        now = datetime.now(timezone.utc)
+        shared_digest = 'sha256:bbe58f25651c93c4a743abbb52a070318a9f34168d42f96b94e9f4dc869e9bce'
+        cached_images = [
+            # :latest and the freshly-rebuilt commit-hash tag resolve to ONE
+            # digest and both carry the digest's original (old) creation date.
+            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.latest',
+                  created_at=now - timedelta(days=30), digest=shared_digest),
+            Image('test.ocir.io/testnamespace/myapp:0d19f5ee', ocid='ocid1.image.sha',
+                  created_at=now - timedelta(days=30), digest=shared_digest),
+            # A genuinely stale, distinct-digest tag that SHOULD still be pruned.
+            Image('test.ocir.io/testnamespace/myapp:reallyold', ocid='ocid1.image.stale',
+                  created_at=now - timedelta(days=40), digest='sha256:stale'),
+        ]
+        # Newer, distinct-digest tags that fill the keep window.
+        for i in range(5):
+            cached_images.append(Image(
+                f'test.ocir.io/testnamespace/myapp:new{i:04d}', ocid=f'ocid1.image.new{i}',
+                created_at=now - timedelta(days=i), digest=f'sha256:new{i}'))
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        # The cleanup scans the repo's :latest tag (CLEANUP_REPO flow).
+        images = [Image('test.ocir.io/testnamespace/myapp:latest')]
+
+        recommendations = client.get_old_ocir_images(images, keep_count=5)
+
+        deleted_tags = ({img.tag for img in recommendations[0].tags_to_delete}
+                        if recommendations else set())
+        # The sha tag sharing :latest's digest must NOT be deleted (would break :latest).
+        assert '0d19f5ee' not in deleted_tags
+        assert 'latest' not in deleted_tags
+        # The distinct-digest stale tag is still pruned — cleanup keeps working.
+        assert deleted_tags == {'reallyold'}
+
+    @patch('src.registry_client.oci')
     def test_get_old_ocir_images_protect_tags_regex(self, mock_oci, base_config):
         """CLEANUP_PROTECT_TAGS_REGEX excludes matching tags from the deletion pool."""
         from dataclasses import replace
