@@ -1,55 +1,61 @@
 include:
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/tag.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/discord-notify.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/renovate.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/branch-cleanup.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/trufflehog.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/trufflehog-image.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/bump-version.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/trigger-bump.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/buildkit-build-check.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/buildkit-docker-push.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: 04c5fd3ccff6dca038591aafcc321d759630aad1
+    ref: b93e5aa4a28e1f32ec2de5cb26d462135ce9afc6
     file: '/gitlab/tox-pipeline.yml'
 
 default:
   tags:
     - self-hosted
 
+# Canonical trigger-prefixed stages (CI consolidation, docs!59):
+#   pr-check  pre-merge validation (build-check, image/secret scan)
+#   test      tox lint matrix (pylint + bandit)
+#   push      default-branch tag/image publish
+#   notify    Discord MR + failure notifications
+#   renovate  scheduled dependency + branch maintenance
 stages:
-  - validate
+  - pr-check
   - test
-  - tag
+  - push
   - notify
   - renovate
 
-# Shared rules for the pre-merge image-build + image-scan jobs (validate-docker,
-# trufflehog-image). They validate the image BEFORE merge, on MRs that touch
+# Shared rules for the pre-merge image-build + image-scan jobs (pr-check:build,
+# pr-check:scan). They validate the image BEFORE merge, on MRs that touch
 # the image inputs. Skipped on cosmetic MRs (github-workflows ref bumps,
 # doc-only edits, renovate.json tweaks); fork MRs keep the manual gate.
 #
-# Deliberately NOT run on the default branch: there, docker-push already
+# Deliberately NOT run on the default branch: there, push:image already
 # rebuilds and pushes the image directly and in parallel, so a separate
 # build-check is just a redundant second build, and a post-push image scan
 # gates nothing (the image is already in the registry).
@@ -71,50 +77,52 @@ bump-version:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^renovate\/dev-/
 
-validate-docker:
+"pr-check:build":
   extends: .buildkit-build-check
+  stage: pr-check
   rules: !reference [.image-build-rules, rules]
 
-# stage: tag overrides the template default (build) since this repo has no
+# stage: push overrides the template default (build) since this repo has no
 # build stage.
-docker-push:
+"push:image":
   extends: .buildkit-docker-push
-  stage: tag
+  stage: push
 
 # Producer side of the docker-apps image-pin bump flow.
 # Rewrites the pin in apps/security-scanner/cronjob.yaml on merge to main.
-# stage: tag overrides the template default (build) since this repo has no
+# stage: push overrides the template default (build) since this repo has no
 # build stage. See github-workflows/gitlab/trigger-bump.yml for details.
 trigger-bump-docker-apps:
   extends: .trigger-bump
-  stage: tag
+  stage: push
   needs:
-    - job: docker-push
+    - job: "push:image"
       artifacts: true
   variables:
     BUMP_SOURCE: 'oke-security-scanner'
 
 
-trufflehog:
+"pr-check:secrets":
   extends: .trufflehog
-  stage: validate
+  stage: pr-check
   rules:
     # Fork MRs require a project member to manually trigger jobs — prevents untrusted code from running CI automatically
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
       when: manual
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
-trufflehog-image:
+"pr-check:scan":
   extends: .trufflehog-image
-  stage: validate
-  needs: [validate-docker]
+  stage: pr-check
+  needs: ["pr-check:build"]
   variables:
     TRUFFLEHOG_IMAGE_TARBALL: image.tar
   rules: !reference [.image-build-rules, rules]
 
 
-tox-generate:
+"test:tox-generate":
   extends: .tox-generate
+  stage: test
   variables:
     # Pre-baked CI base image (ci-base-images:3.X) ships git + ffmpeg +
     # postgresql. ${CI_BASE_IMAGE_PATH} is the group-level plaintext var
@@ -125,17 +133,18 @@ tox-generate:
     TOX_BASE_IMAGE: '${CI_BASE_IMAGE_PATH}:$${PYTHON_VERSION}'
     TOX_GENERATE_IMAGE: '${CI_BASE_IMAGE_PATH}:3.14'
 
-tox-pipeline:
+"test:tox":
   extends: .tox-pipeline
+  stage: test
 
-release-tag:
+"push:tag":
   extends: .tag
-  stage: tag
+  stage: push
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
       when: on_success
 
-notify-mr-opened:
+"notify:mr-opened":
   extends: .discord-notify
   stage: notify
   needs: []
@@ -149,10 +158,10 @@ notify-mr-opened:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: always
 
-notify-release-failure:
+"notify:push-failure":
   extends: .discord-notify
   stage: notify
-  needs: [release-tag, docker-push, trigger-bump-docker-apps]
+  needs: ["push:tag", "push:image", trigger-bump-docker-apps]
   variables:
     NOTIFY_TYPE: failure
     DISCORD_WEBHOOK_URL: $DISCORD_BUILD_FAILURE_WEBHOOK
@@ -160,7 +169,7 @@ notify-release-failure:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
       when: on_failure
 
-notify-renovate-failure:
+"notify:renovate-failure":
   extends: .discord-notify
   stage: renovate
   needs: [renovate]
@@ -172,7 +181,7 @@ notify-renovate-failure:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: on_failure
 
-notify-mr-merged:
+"notify:merged":
   extends: .discord-notify
   stage: notify
   needs: []
@@ -205,7 +214,7 @@ branch-cleanup:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
 
-notify-cleanup-failure:
+"notify:cleanup-failure":
   extends: .discord-notify
   stage: renovate
   needs: [branch-cleanup]
