@@ -5,6 +5,19 @@ All notable changes to the OKE Security Scanner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-07-04
+
+### Fixed
+
+- Extended the shared-digest cleanup guard to protect the digest of *every* tag
+  that survives the run, not just the keep-window/deployed tags. The 0.5.4 fix
+  missed `CLEANUP_PROTECT_TAGS_REGEX` channel tags: a byte-identical
+  `ci-base-images:3.13-<sha>` rebuild shared `:3.13`'s digest, sorted "old" (OCIR
+  dates a container image by when the digest first appeared), and was pruned by
+  OCID — destroying the manifest `:3.13` still pointed at and breaking every
+  runner on that image (`manifest unknown`). A candidate is now deleted only when
+  no surviving tag shares its digest.
+
 ## [0.5.5] - 2026-07-04
 
 ### Changed

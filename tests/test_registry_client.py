@@ -598,6 +598,63 @@ class TestRegistryClient:
         assert deleted_tags == {'3.11-aaa', '3.11-bbb'}
 
     @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_protects_digest_shared_with_protected_channel_tag(self, mock_oci, base_config):
+        """A byte-identical :3.X-<sha> rebuild shares the mutable :3.X channel
+        tag's manifest digest. The channel tag is pulled from the delete pool by
+        CLEANUP_PROTECT_TAGS_REGEX, but OCIR dates the immutable by when that
+        digest first appeared, so it sorts 'old' and lands in the delete pool.
+        Pruning it by OCID would destroy the manifest :3.X still points at
+        ('manifest unknown'). Any candidate sharing a surviving tag's digest —
+        including a protect-regex channel tag — must be spared."""
+        from dataclasses import replace
+        cfg = replace(base_config, cleanup_protect_tags_regex=r'^\d+\.\d+$')
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+        client = RegistryClient(cfg)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+        # Single-arch images: no manifest list to enumerate. Avoids a live
+        # registry HTTP call for every surviving tag.
+        client._get_manifest_list_sub_digests = Mock(return_value=set())
+
+        now = datetime.now(timezone.utc)
+        channel_digest = 'sha256:bbe58f25651c93c4a743abbb52a070318a9f34168d42f96b94e9f4dc869e9bce'
+        cached_images = [
+            # Mutable :3.13 channel and its byte-identical immutable rebuild
+            # resolve to ONE digest and share the digest's original (old) date.
+            Image('test.ocir.io/testnamespace/myapp:3.13', ocid='ch',
+                  created_at=now - timedelta(days=30), digest=channel_digest),
+            Image('test.ocir.io/testnamespace/myapp:3.13-oldsha', ocid='oldsha',
+                  created_at=now - timedelta(days=30), digest=channel_digest),
+            # A genuinely stale, distinct-digest immutable that SHOULD be pruned.
+            Image('test.ocir.io/testnamespace/myapp:3.13-stale', ocid='stale',
+                  created_at=now - timedelta(days=40), digest='sha256:stale'),
+        ]
+        # Newer, distinct-digest immutables that fill the keep window.
+        for i in range(2):
+            cached_images.append(Image(
+                f'test.ocir.io/testnamespace/myapp:3.13-new{i}', ocid=f'new{i}',
+                created_at=now - timedelta(days=i + 1), digest=f'sha256:new{i}'))
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+        images = [Image('test.ocir.io/testnamespace/myapp:latest')]
+
+        recommendations = client.get_old_ocir_images(images, keep_count=2)
+
+        deleted_tags = ({im.tag for im in recommendations[0].tags_to_delete}
+                        if recommendations else set())
+        # The immutable sharing :3.13's digest must NOT be deleted.
+        assert '3.13-oldsha' not in deleted_tags
+        assert '3.13' not in deleted_tags
+        # The distinct-digest stale immutable is still pruned — cleanup works.
+        assert deleted_tags == {'3.13-stale'}
+
+    @patch('src.registry_client.oci')
     def test_get_old_ocir_images_group_by_regex_tagless_image_goes_to_ungrouped(self, mock_oci, base_config):
         """Tagless images (e.g. digest-only manifests) fall into the _ungrouped bucket.
 

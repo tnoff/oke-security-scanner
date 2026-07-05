@@ -477,7 +477,10 @@ class RegistryClient:
                         f'CLEANUP_PROTECT_TAGS_REGEX in {image.repo_name}'
                     )
 
-            # Determine kept images (deployed + newest keep_count [per group]).
+            # Reduce to the delete candidates (all-but-newest keep_count,
+            # per group when CLEANUP_GROUP_BY_REGEX is set). The deployed tag
+            # is resolved to its registry entry so we can protect its digest
+            # even in the fallback case where it isn't among the scanned tags.
             deployed_with_digest = next((im for im in all_images if im.full_name == image.full_name), image)
             if group_re is not None:
                 # CLEANUP_GROUP_BY_REGEX: group remaining tags by the regex's
@@ -493,14 +496,11 @@ class RegistryClient:
                     m = group_re.match(im.tag)
                     key = m.group(1) if m else '_ungrouped'
                     groups[key].append(im)
-                kept_images = [deployed_with_digest]
                 to_delete = []
                 for key, group_images in groups.items():
                     group_images.sort(key=lambda im: im.created_at)
                     if len(group_images) <= keep_count:
-                        kept_images.extend(group_images)
                         continue
-                    kept_images.extend(group_images[len(group_images) - keep_count:])
                     to_delete.extend(group_images[0:len(group_images) - keep_count])
                 if not to_delete:
                     continue
@@ -510,31 +510,40 @@ class RegistryClient:
                 filtered_images.sort(key=lambda im: im.created_at)
                 if len(filtered_images) <= keep_count:
                     continue
-                kept_images = [deployed_with_digest] + filtered_images[len(filtered_images) - keep_count:]
                 filtered_images = filtered_images[0:len(filtered_images) - keep_count]
 
-            # Collect digests we must never delete: each kept image's OWN
-            # manifest digest, plus any sub-manifests it references as a
-            # manifest list. Protecting the kept tag's own digest guards the
-            # byte-identical-rebuild case: a fresh commit-hash tag can share
-            # :latest's (or the deployed image's) digest, and because OCIR dates
-            # a ContainerImage by when the digest first appeared it sorts "old"
-            # and lands in the delete pool — but deleting it by OCID destroys the
-            # shared manifest and breaks the kept tag. Same-digest siblings of a
-            # kept tag must stay.
+            # Collect digests we must never delete. Deleting a ContainerImage by
+            # OCID removes the underlying manifest, so a delete candidate that
+            # shares its digest with ANY tag that outlives this run would break
+            # that surviving tag ("manifest unknown"). The tags that survive are
+            # every tag in the repo EXCEPT the current delete candidates — this
+            # covers :latest, the deployed tag, the keep-window tags, AND the
+            # CLEANUP_PROTECT_TAGS_REGEX channel tags (e.g. ci-base-images'
+            # :3.13) that were pulled out of the candidate pool above. Protecting
+            # only the keep-window tags missed the channel-tag case: a
+            # byte-identical rebuild gives a fresh :3.13-<sha> the channel
+            # digest, OCIR dates it by when that digest first appeared so it
+            # sorts "old" and lands in the delete pool, and pruning it by OCID
+            # destroyed the manifest :3.13 still points at. Protect every
+            # surviving tag's own digest plus any sub-manifests it references.
+            delete_ocids = {im.ocid for im in filtered_images}
+            surviving_images = [im for im in normal_images if im.ocid not in delete_ocids]
+            if deployed_with_digest not in surviving_images:
+                surviving_images.append(deployed_with_digest)
             protected_digests = set()
-            for kept in kept_images:
-                if kept.digest:
-                    protected_digests.add(kept.digest)
-                protected_digests.update(self._get_manifest_list_sub_digests(kept))
-            # Remove images that share a digest with (or are a sub-manifest of) a kept image
+            for surviving in surviving_images:
+                if surviving.digest:
+                    protected_digests.add(surviving.digest)
+                protected_digests.update(self._get_manifest_list_sub_digests(surviving))
+            # Drop candidates that share a digest with (or are a sub-manifest of)
+            # any surviving tag — unless that same tag is itself being deleted.
             if protected_digests:
                 before_count = len(filtered_images)
                 filtered_images = [im for im in filtered_images
                                    if not im.digest or im.digest not in protected_digests]
                 protected_count = before_count - len(filtered_images)
                 if protected_count:
-                    logger.info(f'Protected {protected_count} image(s) sharing a digest with a kept tag in {image.repo_name}')
+                    logger.info(f'Protected {protected_count} image(s) sharing a digest with a surviving tag in {image.repo_name}')
             if not filtered_images:
                 continue
             recommendations.append(CleanupRecommendation(image.registry, image.repo_name, filtered_images))
