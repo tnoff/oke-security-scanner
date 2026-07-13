@@ -1,36 +1,39 @@
 include:
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/tag.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/discord-notify.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/renovate.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/branch-cleanup.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/trufflehog.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/trufflehog-image.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/bump-version.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
+    file: '/gitlab/assemble-changelog.yml'
+  - project: 'tnoff-projects/github-workflows'
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/trigger-bump.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/buildkit-build-check.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/buildkit-docker-push.yml'
   - project: 'tnoff-projects/github-workflows'
-    ref: cfe4637ce67d24b088e57e2f26db6ed9cc047f5b
+    ref: b0c827a5aef955ca22080b534519039d563d6f62
     file: '/gitlab/tox-pipeline.yml'
 
 default:
@@ -77,6 +80,29 @@ bump-version:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^renovate\/dev-/
 
+# Heavy-repo guard: the assemble-changelog fold pushes a "docs: assemble
+# changelog for X" commit to main, which fires a follow-up pipeline. That commit
+# is byte-identical in the image context, so re-running push:image would skip the
+# tag write (shared digest) and trigger-bump would then pin docker-apps at a tag
+# that was never written → phantom Flux pin. Reference this from any job that
+# must NOT re-run on the fold commit; the follow-up pipeline should only re-tag.
+.not-on-changelog-fold:
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /^docs: assemble changelog/'
+      when: never
+
+# Folds accumulated changelog.d/*.md fragments into CHANGELOG.md on the default
+# branch, deletes them, and pushes back (idempotent — no-op when empty). The push
+# (via RENOVATE_TOKEN) fires the follow-up pipeline in which the dir is empty, so
+# push:tag's GATE_ON_FRAGMENTS passes and tagging runs against the assembled tree.
+"assemble-changelog":
+  extends: .assemble-changelog
+  stage: .pre
+  variables:
+    GITLAB_PUSH_TOKEN: $RENOVATE_TOKEN
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+
 "pr-check:build":
   extends: .buildkit-build-check
   stage: pr-check
@@ -87,6 +113,10 @@ bump-version:
 "push:image":
   extends: .buildkit-docker-push
   stage: push
+  rules:
+    - !reference [.not-on-changelog-fold, rules]
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+      when: on_success
 
 # Producer side of the docker-apps image-pin bump flow.
 # Rewrites the pin in apps/security-scanner/cronjob.yaml on merge to main.
@@ -100,6 +130,10 @@ trigger-bump-docker-apps:
       artifacts: true
   variables:
     BUMP_SOURCE: 'oke-security-scanner'
+  rules:
+    - !reference [.not-on-changelog-fold, rules]
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+      when: on_success
 
 
 "pr-check:secrets":
@@ -140,6 +174,11 @@ trigger-bump-docker-apps:
 "push:tag":
   extends: .tag
   stage: push
+  variables:
+    # Defer tag to the post-assemble follow-up pipeline while fragments are still
+    # pending (option a). This is the one push-stage job that DOES run on the fold
+    # commit — it tags the assembled tree once changelog.d is drained.
+    GATE_ON_FRAGMENTS: 'true'
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
       when: on_success
@@ -161,7 +200,14 @@ trigger-bump-docker-apps:
 "notify:push-failure":
   extends: .discord-notify
   stage: notify
-  needs: ["push:tag", "push:image", trigger-bump-docker-apps]
+  # push:image + trigger-bump are optional: they're excluded on the assemble
+  # fold commit (see .not-on-changelog-fold), where only push:tag runs.
+  needs:
+    - "push:tag"
+    - job: "push:image"
+      optional: true
+    - job: trigger-bump-docker-apps
+      optional: true
   variables:
     NOTIFY_TYPE: failure
     DISCORD_WEBHOOK_URL: $DISCORD_BUILD_FAILURE_WEBHOOK
@@ -189,6 +235,8 @@ trigger-bump-docker-apps:
     NOTIFY_TYPE: mr_merged
     DISCORD_WEBHOOK_URL: $DISCORD_MR_MERGED_WEBHOOK
   rules:
+    # Don't fire a spurious "merged" ping on the assemble fold commit.
+    - !reference [.not-on-changelog-fold, rules]
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
       when: always
 
