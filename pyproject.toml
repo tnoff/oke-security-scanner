@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oke-security-scanner"
-version = "0.1.0"
+# Single source of truth: read from the VERSION file (CI bumps it via
+# github-workflows/gitlab/bump-version.yml; push:tag tags from it).
+dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = [
     "kubernetes==36.0.2",
@@ -31,6 +33,9 @@ dev = [
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.4.0",
 ]
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
 
 [tool.setuptools.packages.find]
 where = ["."]
