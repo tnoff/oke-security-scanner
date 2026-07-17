@@ -9,7 +9,7 @@ name = "oke-security-scanner"
 dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = [
-    "kubernetes==36.0.2",
+    "kubernetes==36.0.3",
     "oci==2.182.0",
     "opentelemetry-api",
     "opentelemetry-sdk==1.43.0",
