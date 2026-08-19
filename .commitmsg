@@ -1,0 +1,27 @@
+fix(cleanup): fail safe when an OCIR digest does not resolve
+
+The shared-digest guard protects :latest correctly whenever OCIR returns
+digests, but it fails open when it does not. Three paths:
+
+- a surviving tag with a falsy digest contributed nothing to
+  protected_digests, so if that tag was :latest it went unprotected
+- a delete candidate with no digest passed the filter and was deleted,
+  which is a delete_container_image() call on a manifest the code could
+  not identify
+- an empty protected set skipped the filter entirely and every candidate
+  was deleted unchecked
+
+_get_ocir_images_via_sdk admits the case: tagged images are constructed
+with whatever item.digest holds, and only the untagged branch requires
+one. get_orphaned_manifests already fails safe on the same condition,
+skipping the repo rather than risk deleting something still referenced;
+get_old_ocir_images now matches that posture. Unresolved digest means
+protect, not prune.
+
+Existing fixtures omitted digests entirely, which real OCIR listings
+never do, so they now carry them. The tagless-image fixture is also
+exercised through the new skip path: sorting tag=None against str would
+raise, so the log line stringifies.
+
+Cheap insurance on an operation whose failure mode has twice been a
+fleet-wide manifest unknown / ImagePullBackOff.

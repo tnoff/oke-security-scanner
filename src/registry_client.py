@@ -530,6 +530,21 @@ class RegistryClient:
             surviving_images = [im for im in normal_images if im.ocid not in delete_ocids]
             if deployed_with_digest not in surviving_images:
                 surviving_images.append(deployed_with_digest)
+            # Protection is digest equality, so a surviving tag whose digest
+            # did not resolve is a tag we cannot protect: any candidate sharing
+            # its manifest would still be deleted by OCID and break it. Bail on
+            # the whole repo instead — the same posture get_orphaned_manifests
+            # takes when no sub-manifests resolve. Only registry entries are
+            # checked: the synthetic deployed-tag fallback carries no ocid
+            # precisely because it was never in the listing, so there is nothing
+            # under that name in the registry for a prune to break.
+            # str() because real OCIR listings include tagless images (tag is None)
+            unresolved = sorted(str(im.tag) for im in surviving_images if im.ocid and not im.digest)
+            if unresolved:
+                logger.info(f'Skipping old-image cleanup for {image.repo_name}: surviving '
+                            f'tag(s) {", ".join(unresolved)} have no digest, so a candidate '
+                            f'sharing their manifest could not be protected')
+                continue
             protected_digests = set()
             for surviving in surviving_images:
                 if surviving.digest:
@@ -537,13 +552,19 @@ class RegistryClient:
                 protected_digests.update(self._get_manifest_list_sub_digests(surviving))
             # Drop candidates that share a digest with (or are a sub-manifest of)
             # any surviving tag — unless that same tag is itself being deleted.
-            if protected_digests:
-                before_count = len(filtered_images)
-                filtered_images = [im for im in filtered_images
-                                   if not im.digest or im.digest not in protected_digests]
-                protected_count = before_count - len(filtered_images)
-                if protected_count:
-                    logger.info(f'Protected {protected_count} image(s) sharing a digest with a surviving tag in {image.repo_name}')
+            # A candidate with no digest of its own goes too: deleting it means
+            # calling delete_container_image() on a manifest we could not
+            # identify, and an unidentified manifest is exactly what a shared
+            # digest looks like from here. Unconditional — guarding this on a
+            # non-empty protected set used to let a repo with nothing to protect
+            # delete every candidate unchecked.
+            before_count = len(filtered_images)
+            filtered_images = [im for im in filtered_images
+                               if im.digest and im.digest not in protected_digests]
+            protected_count = before_count - len(filtered_images)
+            if protected_count:
+                logger.info(f'Protected {protected_count} image(s) with an unresolved digest, or '
+                            f'sharing a digest with a surviving tag, in {image.repo_name}')
             if not filtered_images:
                 continue
             recommendations.append(CleanupRecommendation(image.registry, image.repo_name, filtered_images))

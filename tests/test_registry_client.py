@@ -396,7 +396,8 @@ class TestRegistryClient:
             img = Image(
                 f'test.ocir.io/testnamespace/myapp:abc{i:04d}',
                 ocid=f'ocid1.image.{i}',
-                created_at=now - timedelta(days=i)
+                created_at=now - timedelta(days=i),
+                digest=f'sha256:abc{i:04d}',
             )
             cached_images.append(img)
 
@@ -433,11 +434,11 @@ class TestRegistryClient:
 
         now = datetime.now(timezone.utc)
         cached_images = [
-            Image('test.ocir.io/testnamespace/myapp:abc1234', ocid='ocid1.image.1', created_at=now - timedelta(days=10)),
-            Image('test.ocir.io/testnamespace/myapp:v1.0.0', ocid='ocid1.image.2', created_at=now - timedelta(days=9)),
-            Image('test.ocir.io/testnamespace/myapp:my-custom-tag', ocid='ocid1.image.3', created_at=now - timedelta(days=8)),
-            Image('test.ocir.io/testnamespace/myapp:dev-build-42', ocid='ocid1.image.4', created_at=now - timedelta(days=7)),
-            Image('test.ocir.io/testnamespace/myapp:deployed', ocid='ocid1.image.5', created_at=now - timedelta(days=1)),
+            Image('test.ocir.io/testnamespace/myapp:abc1234', ocid='ocid1.image.1', created_at=now - timedelta(days=10), digest='sha256:fixture022'),
+            Image('test.ocir.io/testnamespace/myapp:v1.0.0', ocid='ocid1.image.2', created_at=now - timedelta(days=9), digest='sha256:fixture023'),
+            Image('test.ocir.io/testnamespace/myapp:my-custom-tag', ocid='ocid1.image.3', created_at=now - timedelta(days=8), digest='sha256:fixture024'),
+            Image('test.ocir.io/testnamespace/myapp:dev-build-42', ocid='ocid1.image.4', created_at=now - timedelta(days=7), digest='sha256:fixture025'),
+            Image('test.ocir.io/testnamespace/myapp:deployed', ocid='ocid1.image.5', created_at=now - timedelta(days=1), digest='sha256:fixture026'),
         ]
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
 
@@ -477,10 +478,10 @@ class TestRegistryClient:
 
         now = datetime.now(timezone.utc)
         cached_images = [
-            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.0', created_at=now),
-            Image('test.ocir.io/testnamespace/myapp:abc1234', ocid='ocid1.image.1', created_at=now - timedelta(days=10)),
-            Image('test.ocir.io/testnamespace/myapp:old-tag', ocid='ocid1.image.2', created_at=now - timedelta(days=9)),
-            Image('test.ocir.io/testnamespace/myapp:deployed', ocid='ocid1.image.3', created_at=now - timedelta(days=1)),
+            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.0', created_at=now, digest='sha256:fixture018'),
+            Image('test.ocir.io/testnamespace/myapp:abc1234', ocid='ocid1.image.1', created_at=now - timedelta(days=10), digest='sha256:fixture019'),
+            Image('test.ocir.io/testnamespace/myapp:old-tag', ocid='ocid1.image.2', created_at=now - timedelta(days=9), digest='sha256:fixture020'),
+            Image('test.ocir.io/testnamespace/myapp:deployed', ocid='ocid1.image.3', created_at=now - timedelta(days=1), digest='sha256:fixture021'),
         ]
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
 
@@ -553,6 +554,108 @@ class TestRegistryClient:
         # The distinct-digest stale tag is still pruned — cleanup keeps working.
         assert deleted_tags == {'reallyold'}
 
+    def _mock_oci_clients(self, mock_oci):
+        """Wire the OCI SDK mocks every get_old_ocir_images test needs."""
+        mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
+        mock_oci.artifacts.ArtifactsClient.return_value = Mock()
+        mock_oci.identity.IdentityClient.return_value = Mock()
+        mock_object_client = Mock()
+        mock_response = Mock()
+        mock_response.data = 'testnamespace'
+        mock_object_client.get_namespace.return_value = mock_response
+        mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_skips_repo_when_a_surviving_tag_has_no_digest(self, mock_oci, config):
+        """Protection is digest equality, so a surviving tag with no digest cannot
+        be protected — a candidate sharing its manifest would be deleted by OCID
+        and break it. Bail on the repo instead of pruning blind. One of the
+        unresolved tags is tagless (real OCIR listings contain them) to prove the
+        log line doesn't blow up sorting None against str."""
+        self._mock_oci_clients(mock_oci)
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+        client._get_manifest_list_sub_digests = Mock(return_value=set())
+
+        now = datetime.now(timezone.utc)
+        # :latest survives but its digest never resolved.
+        no_digest_latest = Image('test.ocir.io/testnamespace/myapp:latest',
+                                 ocid='ocid1.image.latest', created_at=now)
+        tagless = Image('test.ocir.io/testnamespace/myapp:placeholder',
+                        ocid='ocid1.image.tagless', created_at=now)
+        tagless.tag = None
+        cached_images = [no_digest_latest, tagless]
+        for i in range(8):
+            cached_images.append(Image(
+                f'test.ocir.io/testnamespace/myapp:sha{i:04d}', ocid=f'ocid1.image.{i}',
+                created_at=now - timedelta(days=20 - i), digest=f'sha256:sha{i:04d}'))
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        images = [Image('test.ocir.io/testnamespace/myapp:latest')]
+        recommendations = client.get_old_ocir_images(images, keep_count=5)
+
+        # Without the guard, 3 of the 8 sha tags would be pruned here.
+        assert recommendations == []
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_protects_candidate_with_no_digest(self, mock_oci, config):
+        """A candidate whose own digest is unresolved is never deleted: the delete
+        is by OCID, so an unidentified manifest is exactly what a shared digest
+        looks like from here. Candidates that DID resolve are still pruned."""
+        self._mock_oci_clients(mock_oci)
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+        client._get_manifest_list_sub_digests = Mock(return_value=set())
+
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image('test.ocir.io/testnamespace/myapp:latest', ocid='ocid1.image.latest',
+                  created_at=now, digest='sha256:latestdigest'),
+            # Oldest two are candidates; one never resolved a digest.
+            Image('test.ocir.io/testnamespace/myapp:nodigest', ocid='ocid1.image.nodigest',
+                  created_at=now - timedelta(days=40)),
+            Image('test.ocir.io/testnamespace/myapp:resolved', ocid='ocid1.image.resolved',
+                  created_at=now - timedelta(days=39), digest='sha256:resolved'),
+        ]
+        for i in range(5):
+            cached_images.append(Image(
+                f'test.ocir.io/testnamespace/myapp:new{i:04d}', ocid=f'ocid1.image.new{i}',
+                created_at=now - timedelta(days=i), digest=f'sha256:new{i}'))
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        images = [Image('test.ocir.io/testnamespace/myapp:latest')]
+        recommendations = client.get_old_ocir_images(images, keep_count=5)
+
+        deleted_tags = {img.tag for img in recommendations[0].tags_to_delete}
+        assert 'nodigest' not in deleted_tags
+        assert deleted_tags == {'resolved'}
+
+    @patch('src.registry_client.oci')
+    def test_get_old_ocir_images_prunes_when_nothing_is_protected(self, mock_oci, config):
+        """A repo with no :latest and a deployed tag absent from the listing leaves
+        the protected set empty. Guarding the filter on a non-empty set used to
+        skip it entirely; it now always runs, and resolvable candidates still go."""
+        self._mock_oci_clients(mock_oci)
+        client = RegistryClient(config)
+        client._repository_compartment_cache['myapp'] = 'ocid1.compartment.apps'
+        client._get_manifest_list_sub_digests = Mock(return_value=set())
+
+        now = datetime.now(timezone.utc)
+        cached_images = [
+            Image(f'test.ocir.io/testnamespace/myapp:sha{i:04d}', ocid=f'ocid1.image.{i}',
+                  created_at=now - timedelta(days=20 - i), digest=f'sha256:sha{i:04d}')
+            for i in range(7)
+        ]
+        client._ocir_image_cache['testnamespace/myapp'] = cached_images
+
+        # Deployed tag is not in the listing, so it resolves to the synthetic
+        # fallback: no ocid, no digest, nothing to protect.
+        images = [Image('test.ocir.io/testnamespace/myapp:deployed-elsewhere')]
+        recommendations = client.get_old_ocir_images(images, keep_count=5)
+
+        deleted_tags = {img.tag for img in recommendations[0].tags_to_delete}
+        assert deleted_tags == {'sha0000', 'sha0001'}
+
     @patch('src.registry_client.oci')
     def test_get_old_ocir_images_protect_tags_regex(self, mock_oci, base_config):
         """CLEANUP_PROTECT_TAGS_REGEX excludes matching tags from the deletion pool."""
@@ -576,13 +679,13 @@ class TestRegistryClient:
         now = datetime.now(timezone.utc)
         cached_images = [
             # Mutable channels — old created_at but must be protected
-            Image('test.ocir.io/testnamespace/myapp:3.11', ocid='m1', created_at=now - timedelta(days=100)),
-            Image('test.ocir.io/testnamespace/myapp:3.12', ocid='m2', created_at=now - timedelta(days=100)),
+            Image('test.ocir.io/testnamespace/myapp:3.11', ocid='m1', created_at=now - timedelta(days=100), digest='sha256:fixture012'),
+            Image('test.ocir.io/testnamespace/myapp:3.12', ocid='m2', created_at=now - timedelta(days=100), digest='sha256:fixture013'),
             # Immutables — should be eligible for deletion under keep_count
-            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='i1', created_at=now - timedelta(days=10)),
-            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='i2', created_at=now - timedelta(days=9)),
-            Image('test.ocir.io/testnamespace/myapp:3.11-ccc', ocid='i3', created_at=now - timedelta(days=8)),
-            Image('test.ocir.io/testnamespace/myapp:3.11-ddd', ocid='i4', created_at=now - timedelta(days=1)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='i1', created_at=now - timedelta(days=10), digest='sha256:fixture014'),
+            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='i2', created_at=now - timedelta(days=9), digest='sha256:fixture015'),
+            Image('test.ocir.io/testnamespace/myapp:3.11-ccc', ocid='i3', created_at=now - timedelta(days=8), digest='sha256:fixture016'),
+            Image('test.ocir.io/testnamespace/myapp:3.11-ddd', ocid='i4', created_at=now - timedelta(days=1), digest='sha256:fixture017'),
         ]
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
         images = [Image('test.ocir.io/testnamespace/myapp:latest')]
@@ -680,15 +783,16 @@ class TestRegistryClient:
 
         now = datetime.now(timezone.utc)
         cached_images = [
-            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='g1', created_at=now - timedelta(days=5)),
-            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='g2', created_at=now - timedelta(days=1)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='g1', created_at=now - timedelta(days=5), digest='sha256:fixture009'),
+            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='g2', created_at=now - timedelta(days=1), digest='sha256:fixture010'),
         ]
         # Three digest-only siblings — overwrite their .tag after construction
         # so they survive the "must be present" check in __init__ but reach
         # the grouping branch with tag=None.
         for i in range(3):
             tagless = Image(f'test.ocir.io/testnamespace/myapp:placeholder{i}',
-                            ocid=f'tl{i}', created_at=now - timedelta(days=40 - i))
+                            ocid=f'tl{i}', created_at=now - timedelta(days=40 - i),
+                            digest=f'sha256:tagless{i}')
             tagless.tag = None
             cached_images.append(tagless)
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
@@ -769,16 +873,16 @@ class TestRegistryClient:
         # must keep 3.12-only because it's the only tag in its group.
         now = datetime.now(timezone.utc)
         cached_images = [
-            Image('test.ocir.io/testnamespace/myapp:3.11', ocid='m1', created_at=now - timedelta(days=1)),
-            Image('test.ocir.io/testnamespace/myapp:3.12', ocid='m2', created_at=now - timedelta(days=1)),
+            Image('test.ocir.io/testnamespace/myapp:3.11', ocid='m1', created_at=now - timedelta(days=1), digest='sha256:fixture001'),
+            Image('test.ocir.io/testnamespace/myapp:3.12', ocid='m2', created_at=now - timedelta(days=1), digest='sha256:fixture002'),
             # 3.12: one older build, should be kept (sole occupant of its group)
-            Image('test.ocir.io/testnamespace/myapp:3.12-only', ocid='g1', created_at=now - timedelta(days=30)),
+            Image('test.ocir.io/testnamespace/myapp:3.12-only', ocid='g1', created_at=now - timedelta(days=30), digest='sha256:fixture003'),
             # 3.11: five recent builds, keep_count=2 → keep 2 newest, delete 3 oldest
-            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='g2', created_at=now - timedelta(days=10)),
-            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='g3', created_at=now - timedelta(days=9)),
-            Image('test.ocir.io/testnamespace/myapp:3.11-ccc', ocid='g4', created_at=now - timedelta(days=8)),
-            Image('test.ocir.io/testnamespace/myapp:3.11-ddd', ocid='g5', created_at=now - timedelta(days=2)),
-            Image('test.ocir.io/testnamespace/myapp:3.11-eee', ocid='g6', created_at=now - timedelta(days=1)),
+            Image('test.ocir.io/testnamespace/myapp:3.11-aaa', ocid='g2', created_at=now - timedelta(days=10), digest='sha256:fixture004'),
+            Image('test.ocir.io/testnamespace/myapp:3.11-bbb', ocid='g3', created_at=now - timedelta(days=9), digest='sha256:fixture005'),
+            Image('test.ocir.io/testnamespace/myapp:3.11-ccc', ocid='g4', created_at=now - timedelta(days=8), digest='sha256:fixture006'),
+            Image('test.ocir.io/testnamespace/myapp:3.11-ddd', ocid='g5', created_at=now - timedelta(days=2), digest='sha256:fixture007'),
+            Image('test.ocir.io/testnamespace/myapp:3.11-eee', ocid='g6', created_at=now - timedelta(days=1), digest='sha256:fixture008'),
         ]
         client._ocir_image_cache['testnamespace/myapp'] = cached_images
         images = [Image('test.ocir.io/testnamespace/myapp:latest')]
