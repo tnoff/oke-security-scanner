@@ -1,0 +1,108 @@
+name: CI
+
+# Pull-request checks, ported from .gitlab-ci.yml's pr-check and test stages.
+# Shared jobs come from tnoff/github-workflows, SHA-pinned the same way the
+# GitLab `include:` refs were; Renovate's github-actions manager keeps the
+# pins current.
+
+on:
+  pull_request:
+
+# One in-flight run per PR. Renovate force-pushes on rebase
+# (rebaseWhen: behind-base-branch), and without this every rebase leaves its
+# predecessor running to completion.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Scan for secrets
+    uses: tnoff/github-workflows/.github/workflows/trufflehog.yml@370df8eb59c656d05358d6be7799d7355f6d750e
+
+  # extra_apt is deliberately empty. The GitLab job ran on ci-base-images,
+  # advertised as "git + ffmpeg + postgresql", but that was the fleet-wide
+  # Python base rather than this repo's requirement -- kubernetes, oci,
+  # requests, python-gitlab, dappertable and the OpenTelemetry SDK are all
+  # pure-Python wheels, and nothing here touches ffmpeg or a database.
+  tox:
+    name: Tox
+    uses: tnoff/github-workflows/.github/workflows/tox.yml@370df8eb59c656d05358d6be7799d7355f6d750e
+
+  # Reimplements .image-build-rules' `changes:` block: only rebuild when
+  # something baked into the image changed. Doc-only, renovate.json and
+  # workflow-pin PRs skip the build, exactly as on GitLab.
+  #
+  # Done with git rather than a path-filter action to avoid another pinned
+  # dependency for ~10 lines of shell. A workflow-level `paths:` filter would
+  # be wrong: it would gate the secret scan, the tox matrix and bump-version too.
+  changes:
+    name: Detect image-input changes
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      image: ${{ steps.filter.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Filter
+        id: filter
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin "${BASE_REF}"
+          MATCH=false
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              Dockerfile|pyproject.toml|src/*) MATCH=true; break ;;
+            esac
+          done <<< "$(git diff --name-only "origin/${BASE_REF}...HEAD")"
+          echo "image inputs changed: ${MATCH}"
+          echo "image=${MATCH}" >> "$GITHUB_OUTPUT"
+
+  # GitLab ran the build and the image scan as two jobs, shipping the image
+  # between them as a tarball through an object-storage bucket.
+  # docker-build-check does both in one job, so the bucket, the upload and the
+  # download are gone.
+  #
+  # NOTE: conditional, so it must never be added to required_status_checks --
+  # a required check that skips blocks the merge.
+  build:
+    name: Build and scan image
+    needs: changes
+    if: needs.changes.outputs.image == 'true'
+    uses: tnoff/github-workflows/.github/workflows/docker-build-check.yml@370df8eb59c656d05358d6be7799d7355f6d750e
+
+  bump-version:
+    name: Bump version
+    # Matches the GitLab rule. The dev- prefix comes from the shared renovate
+    # python preset and is load-bearing: it is what decides whether an update
+    # bumps VERSION, writes a changelog fragment, and therefore cuts a release.
+    if: startsWith(github.head_ref, 'renovate/dev-')
+    permissions:
+      contents: write
+    uses: tnoff/github-workflows/.github/workflows/bump-version.yml@370df8eb59c656d05358d6be7799d7355f6d750e
+    with:
+      bump_changelog: true
+    secrets:
+      git_push_token: ${{ secrets.GIT_PUSH_TOKEN }}
+
+  auto-approve:
+    name: Auto-approve
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: tnoff/github-workflows/.github/workflows/renovate-auto-approve.yml@370df8eb59c656d05358d6be7799d7355f6d750e
+    with:
+      branch_pattern: '^renovate/'
+    secrets:
+      approval_token: ${{ secrets.APPROVAL_TOKEN }}
