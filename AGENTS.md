@@ -19,7 +19,7 @@ oke-security-scanner/
 │   └── discord_notifier.py  # Discord webhook notifications
 ├── tests/                # Pytest suite (100% line coverage)
 ├── k8s/                  # CronJob + RBAC + Secret examples
-├── .gitlab-ci.yml        # GitLab CI pipeline
+├── .github/workflows/    # GitHub Actions: ci.yml, release.yml, scheduled.yml
 ├── Dockerfile            # Two-stage build (trivy-builder + slim runtime)
 ├── pyproject.toml        # Python deps, build metadata, pylint config
 ├── tox.ini               # pytest / pylint / bandit envs
@@ -123,9 +123,13 @@ The final image carries **no** `curl` / `wget` / `tar` / `git` / build toolchain
 
 ## CI/CD
 
-The project uses **GitLab CI** (`.gitlab-ci.yml`), not GitHub Actions. Pipeline stages: bump-version, validate-docker, docker-push (multi-arch), trufflehog secret scanning, tox (pytest + pylint + bandit across Python 3.11–3.14), release-tag, MR/release notifications, renovate.
+The project uses **GitHub Actions**. `.github/workflows/` holds three callers:
 
-Pipeline templates are pulled in via the `include:` block at the top of `.gitlab-ci.yml`.
+- `ci.yml` — on pull requests: trufflehog secret scan, the tox matrix (pytest + pylint + bandit across Python 3.11–3.14) with a diff-cover gate, a conditional image build + image scan, plus `bump-version` and Renovate auto-approve.
+- `release.yml` — on `main`: fold the changelog, tag from `VERSION`, push the image to OCIR, and trigger the `docker-apps` pin bump.
+- `scheduled.yml` — weekly: Renovate and branch cleanup.
+
+Each job calls a reusable workflow from `tnoff/github-workflows`, SHA-pinned in `uses:` and kept current by Renovate's github-actions manager. `.gitlab-ci.yml` is frozen in place for history and no longer runs.
 
 ## Code Quality
 

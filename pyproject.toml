@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oke-security-scanner"
-# Single source of truth: read from the VERSION file (CI bumps it via
-# github-workflows/gitlab/bump-version.yml; push:tag tags from it).
+# Single source of truth: read from the VERSION file (CI bumps it via the
+# bump-version job in .github/workflows/ci.yml; release.yml tags from it).
 dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = [
