@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oke-security-scanner"
-# Single source of truth: read from the VERSION file (CI bumps it via
-# github-workflows/gitlab/bump-version.yml; push:tag tags from it).
+# Single source of truth: read from the VERSION file (CI bumps it via the
+# bump-version job in .github/workflows/ci.yml; release.yml tags from it).
 dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = [
@@ -17,7 +17,10 @@ dependencies = [
     "opentelemetry-instrumentation",
     "opentelemetry-instrumentation-logging",
     "requests",
-    "dappertable @ https://gitlab.com/tnoff-projects/dappertable/-/archive/v1.1.4/dappertable-v1.1.4.tar",
+    # dappertable is GitHub-canonical. The GitLab copy still resolves, but its
+    # tags stop at v1.1.5 while GitHub is on v1.1.6, so this pin could never be
+    # bumped past the freeze. Verified installable at 1.1.4 from this URL.
+    "dappertable @ https://github.com/tnoff/dappertable/archive/refs/tags/v1.1.4.tar.gz",
     # Consumed by src/secret_age/readers/gitlab.py — blames docker-apps
     # SealedSecret YAMLs and lists PAT expiries for rotation tracking.
     "python-gitlab==8.5.0",
