@@ -20,7 +20,7 @@ dependencies = [
     # dappertable is GitHub-canonical. The GitLab copy still resolves, but its
     # tags stop at v1.1.5 while GitHub is on v1.1.6, so this pin could never be
     # bumped past the freeze. Verified installable at 1.1.4 from this URL.
-    "dappertable @ https://github.com/tnoff/dappertable/archive/refs/tags/v1.1.4.tar.gz",
+    "dappertable @ https://github.com/tnoff/dappertable/archive/refs/tags/v1.1.6.tar.gz",
     # Consumed by src/secret_age/readers/gitlab.py — blames docker-apps
     # SealedSecret YAMLs and lists PAT expiries for rotation tracking.
     "python-gitlab==8.5.0",
