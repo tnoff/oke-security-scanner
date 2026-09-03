@@ -33,7 +33,8 @@ jobs:
       contents: write
     uses: tnoff/github-workflows/.github/workflows/assemble-changelog.yml@8570bac7529b60e79b4fc6c837027d2f65fc0c9f
     secrets:
-      push_token: ${{ secrets.GIT_PUSH_TOKEN }}
+      app_id: ${{ secrets.CI_APP_ID }}
+      app_private_key: ${{ secrets.CI_APP_PRIVATE_KEY }}
 
   tag:
     name: Tag
@@ -44,7 +45,8 @@ jobs:
     with:
       gate_on_fragments: true
     secrets:
-      push_token: ${{ secrets.GIT_PUSH_TOKEN }}
+      app_id: ${{ secrets.CI_APP_ID }}
+      app_private_key: ${{ secrets.CI_APP_PRIVATE_KEY }}
 
   push-image:
     name: Push image

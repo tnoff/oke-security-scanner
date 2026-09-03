@@ -94,7 +94,8 @@ jobs:
     with:
       bump_changelog: true
     secrets:
-      git_push_token: ${{ secrets.GIT_PUSH_TOKEN }}
+      app_id: ${{ secrets.CI_APP_ID }}
+      app_private_key: ${{ secrets.CI_APP_PRIVATE_KEY }}
 
   result:
     name: CI result
