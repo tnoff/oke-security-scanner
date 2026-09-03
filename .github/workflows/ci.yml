@@ -21,7 +21,7 @@ permissions:
 jobs:
   secrets:
     name: Scan for secrets
-    uses: tnoff/github-workflows/.github/workflows/trufflehog.yml@3326ac29c672f67bce33272b3a09fe06c9947080
+    uses: tnoff/github-workflows/.github/workflows/trufflehog.yml@8570bac7529b60e79b4fc6c837027d2f65fc0c9f
 
   # extra_apt is deliberately empty. The GitLab job ran on ci-base-images,
   # advertised as "git + ffmpeg + postgresql", but that was the fleet-wide
@@ -30,7 +30,7 @@ jobs:
   # pure-Python wheels, and nothing here touches ffmpeg or a database.
   tox:
     name: Tox
-    uses: tnoff/github-workflows/.github/workflows/tox.yml@3326ac29c672f67bce33272b3a09fe06c9947080
+    uses: tnoff/github-workflows/.github/workflows/tox.yml@8570bac7529b60e79b4fc6c837027d2f65fc0c9f
 
   # Reimplements .image-build-rules' `changes:` block: only rebuild when
   # something baked into the image changed. Doc-only, renovate.json and
@@ -80,7 +80,7 @@ jobs:
     name: Build and scan image
     needs: changes
     if: needs.changes.outputs.image == 'true'
-    uses: tnoff/github-workflows/.github/workflows/docker-build-check.yml@3326ac29c672f67bce33272b3a09fe06c9947080
+    uses: tnoff/github-workflows/.github/workflows/docker-build-check.yml@8570bac7529b60e79b4fc6c837027d2f65fc0c9f
 
   bump-version:
     name: Bump version
@@ -90,11 +90,12 @@ jobs:
     if: startsWith(github.head_ref, 'renovate/dev-')
     permissions:
       contents: write
-    uses: tnoff/github-workflows/.github/workflows/bump-version.yml@3326ac29c672f67bce33272b3a09fe06c9947080
+    uses: tnoff/github-workflows/.github/workflows/bump-version.yml@8570bac7529b60e79b4fc6c837027d2f65fc0c9f
     with:
       bump_changelog: true
     secrets:
-      git_push_token: ${{ secrets.GIT_PUSH_TOKEN }}
+      app_id: ${{ secrets.CI_APP_ID }}
+      app_private_key: ${{ secrets.CI_APP_PRIVATE_KEY }}
 
   result:
     name: CI result
