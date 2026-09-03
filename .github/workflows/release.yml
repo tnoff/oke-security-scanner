@@ -31,7 +31,7 @@ jobs:
     name: Assemble changelog
     permissions:
       contents: write
-    uses: tnoff/github-workflows/.github/workflows/assemble-changelog.yml@8570bac7529b60e79b4fc6c837027d2f65fc0c9f
+    uses: tnoff/github-workflows/.github/workflows/assemble-changelog.yml@362a5f0d06fec04588c60863ccf0bf2ce709917f
     secrets:
       app_id: ${{ secrets.CI_APP_ID }}
       app_private_key: ${{ secrets.CI_APP_PRIVATE_KEY }}
@@ -41,7 +41,7 @@ jobs:
     needs: assemble-changelog
     permissions:
       contents: write
-    uses: tnoff/github-workflows/.github/workflows/tag.yml@8570bac7529b60e79b4fc6c837027d2f65fc0c9f
+    uses: tnoff/github-workflows/.github/workflows/tag.yml@362a5f0d06fec04588c60863ccf0bf2ce709917f
     with:
       gate_on_fragments: true
     secrets:
@@ -51,7 +51,7 @@ jobs:
   push-image:
     name: Push image
     if: "${{ !startsWith(github.event.head_commit.message, 'docs: assemble changelog') }}"
-    uses: tnoff/github-workflows/.github/workflows/docker-push.yml@8570bac7529b60e79b4fc6c837027d2f65fc0c9f
+    uses: tnoff/github-workflows/.github/workflows/docker-push.yml@362a5f0d06fec04588c60863ccf0bf2ce709917f
     # registry / namespace / repo_name are INPUTS, not secrets. GitHub refuses
     # to set a job output containing secret material, so as secrets the `image`
     # output below comes back EMPTY and trigger-bump sends a blank IMAGE_NAME.
@@ -67,7 +67,7 @@ jobs:
   trigger-bump:
     name: Trigger docker-apps bump
     needs: push-image
-    uses: tnoff/github-workflows/.github/workflows/trigger-bump.yml@8570bac7529b60e79b4fc6c837027d2f65fc0c9f
+    uses: tnoff/github-workflows/.github/workflows/trigger-bump.yml@362a5f0d06fec04588c60863ccf0bf2ce709917f
     # Rewrites the pin in docker-apps apps/security-scanner/cronjob.yaml.
     with:
       bump_source: oke-security-scanner
