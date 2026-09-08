@@ -20,6 +20,6 @@ metadata:
   # Scheduled Job, not a Deployment -- same reason as database-backup for leaving the
   # kubernetes annotations off.
 spec:
-  type: tool
+  type: service
   owner: group:default/admin
   lifecycle: production
