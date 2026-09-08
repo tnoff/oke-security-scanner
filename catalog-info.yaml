@@ -1,0 +1,25 @@
+# Backstage catalog descriptor. Discovered automatically -- the portal's GitHub
+# provider reads catalog-info.yaml from the default branch of every repo the
+# tnoff-backstage App can see, so adding this file is the whole of onboarding.
+# Nothing needs registering by hand, and it appears on the next 3h sweep.
+#
+# No annotations, deliberately. github.com/project-slug is DERIVED: the portal
+# registers AnnotateScmSlugEntityProcessor, which reads the slug off the location
+# this file was fetched from, so writing one here would duplicate something that
+# cannot go stale. The rest -- backstage.io/techdocs-ref, the kubernetes
+# selectors, the grafana selectors -- each assert that a target EXISTS, and none
+# of those targets do yet. They arrive with the plugins that read them.
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: oke-security-scanner
+  description: >-
+    Scans the images actually deployed in OKE for vulnerabilities and reports with
+    OpenTelemetry instrumentation. docker-apps runs it from a CronJob in
+    apps/security-scanner, alongside the secret-age tracker.
+  # Scheduled Job, not a Deployment -- same reason as database-backup for leaving the
+  # kubernetes annotations off.
+spec:
+  type: tool
+  owner: group:default/admin
+  lifecycle: production
