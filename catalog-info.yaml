@@ -14,12 +14,29 @@ kind: Component
 metadata:
   name: oke-security-scanner
   description: >-
-    Scans the images actually deployed in OKE for vulnerabilities and reports with
-    OpenTelemetry instrumentation. docker-apps runs it from a CronJob in
-    apps/security-scanner, alongside the secret-age tracker.
-  # Scheduled Job, not a Deployment -- same reason as database-backup for leaving the
-  # kubernetes annotations off.
+    Scans the images actually deployed in OKE for vulnerabilities, prunes stale OCIR tags,
+    and tracks secret ages -- three jobs from one image, reporting over OpenTelemetry.
+    docker-apps runs it three times from apps/security-scanner: security-scanner (Trivy,
+    daily 11:00), cleanup-all (OCIR prune, daily 03:00) and secret-age-tracker (Sundays
+    12:00), each its own Component in that repo.
+  # `library` rather than `service`, changed once those three CronJob Components existed.
+  #
+  # Same call, same reasoning, as database-backup#226: while nothing in the catalog
+  # represented the deployed thing, this entity had to stand in for it. Now three
+  # Components do, and this is what it actually is -- an artifact they consume.
+  #
+  # `library` is not limited to pip-installable packages. MMM-BartTimes is `library` and
+  # is a MagicMirror JS module baked into magic-mirror-docker's image; the working
+  # definition is "a thing other components consume rather than a thing that runs on its
+  # own". An image invoked from a CronJob is that.
+  #
+  # No spec.system, matching database-backup and every other library here. The three
+  # CronJobs have none either -- see the note in docker-apps' descriptor for why no System
+  # was invented for them.
+  #
+  # No kubernetes annotation, and now for a better reason than "it is a scheduled Job":
+  # the pods belong to the three Components, which is where that annotation should go.
 spec:
-  type: service
+  type: library
   owner: group:default/admin
   lifecycle: production
