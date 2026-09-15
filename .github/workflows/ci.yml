@@ -19,8 +19,56 @@ permissions:
   contents: read
 
 jobs:
+  # A PR that touches only catalog-info.yaml or renovate.json changes nothing any
+  # job here inspects: no source, no image input, no packaging metadata, no
+  # workflow. So all of them gate on this and CI reduces to the aggregate.
+  #
+  # This MUST stay a job-level `if:` and never become a workflow-level
+  # `paths-ignore`. The branch ruleset requires the `CI result` context;
+  # `paths-ignore` stops the whole workflow, so that context never reports at all
+  # -- and a required check that never reports blocks the PR forever, where a
+  # SKIPPED job scores as success. The two failure modes look nothing alike.
+  #
+  # Two files, named exactly, anchored. Not a prefix, not a glob, not a
+  # deny-list of "things that feel unimportant": a list that grows by feel is one
+  # somebody eventually adds a file to that did matter.
+  #
+  # An empty or unreadable diff yields false, which runs everything.
+  metadata:
+    name: Detect metadata-only change
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      only: ${{ steps.filter.outputs.only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Filter
+        id: filter
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin "${BASE_REF}"
+          FILES="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
+          ONLY=false
+          if [ -n "${FILES}" ]; then
+            OTHER="$(printf '%s\n' "${FILES}" | grep -vE '^(catalog-info\.yaml|renovate\.json)$' || true)"
+            [ -z "${OTHER}" ] && ONLY=true
+          fi
+          echo "changed files:"
+          printf '%s\n' "${FILES}" | sed -n 's/^/  /p'
+          echo "metadata-only: ${ONLY}"
+          echo "only=${ONLY}" >> "$GITHUB_OUTPUT"
+
   secrets:
     name: Scan for secrets
+    needs: metadata
+    if: needs.metadata.outputs.only != 'true'
     uses: tnoff/github-workflows/.github/workflows/trufflehog.yml@2c7a6597fce4072fb2755f49742147e7482e6065
 
   # extra_apt is deliberately empty. The GitLab job ran on ci-base-images,
@@ -30,6 +78,8 @@ jobs:
   # pure-Python wheels, and nothing here touches ffmpeg or a database.
   tox:
     name: Tox
+    needs: metadata
+    if: needs.metadata.outputs.only != 'true'
     uses: tnoff/github-workflows/.github/workflows/tox.yml@2c7a6597fce4072fb2755f49742147e7482e6065
 
   # Reimplements .image-build-rules' `changes:` block: only rebuild when
@@ -41,6 +91,8 @@ jobs:
   # be wrong: it would gate the secret scan, the tox matrix and bump-version too.
   changes:
     name: Detect image-input changes
+    needs: metadata
+    if: needs.metadata.outputs.only != 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -104,6 +156,8 @@ jobs:
   # left `Release` dead in nine repos for five days in September 2026.
   contracts:
     name: Workflow contracts
+    needs: metadata
+    if: needs.metadata.outputs.only != 'true'
     uses: tnoff/github-workflows/.github/workflows/check-workflow-contracts.yml@2740215791774b60db5cb6da23da260de2e6dfd8
 
   result:
@@ -127,7 +181,7 @@ jobs:
     # This job always runs and its name never changes, so the ruleset requires
     # exactly one context and the jobs underneath stay free to change.
     if: always()
-    needs: [secrets, tox, changes, build, contracts]
+    needs: [secrets, tox, changes, build, contracts, metadata]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -135,6 +189,7 @@ jobs:
       - name: Summarise
         run: |
           echo "secrets:   ${{ needs.secrets.result }}"
+          echo "metadata:  ${{ needs.metadata.result }}"
           echo "tox:       ${{ needs.tox.result }}"
           echo "changes:   ${{ needs.changes.result }}"
           echo "build:     ${{ needs.build.result }}"
@@ -148,7 +203,8 @@ jobs:
           needs.tox.result == 'failure' || needs.tox.result == 'cancelled' ||
           needs.changes.result == 'failure' || needs.changes.result == 'cancelled' ||
           needs.build.result == 'failure' || needs.build.result == 'cancelled' ||
-          needs.contracts.result == 'failure' || needs.contracts.result == 'cancelled'
+          needs.contracts.result == 'failure' || needs.contracts.result == 'cancelled' ||
+          needs.metadata.result == 'failure' || needs.metadata.result == 'cancelled'
         run: |
           echo "::error::One or more CI jobs did not pass."
           exit 1
