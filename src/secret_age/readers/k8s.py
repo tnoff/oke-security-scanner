@@ -62,8 +62,7 @@ def _expiry_finding(s, annotations: dict, today: date, cfg: SecretAgeConfig) -> 
 
     Returns None when the annotation is absent, the sentinel, malformed,
     or the expiry is still further out than the warn window. age_days is
-    days-until-expiry (negative once expired), mirroring the GitLab
-    PAT-expiry convention in readers.gitlab.
+    days-until-expiry (negative once expired).
     """
     raw = annotations.get(EXPIRES_ANNOTATION)
     if not raw or raw == SENTINEL:
