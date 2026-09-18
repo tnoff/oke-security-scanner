@@ -10,7 +10,6 @@ from logging import getLogger
 from .aggregator import aggregate
 from .config import SecretAgeConfig
 from .discord_report import send_report
-from .readers import gitlab as gitlab_reader
 from .readers import k8s as k8s_reader
 from .readers import layer1_ledger as layer1_reader
 from .readers import oci_iam as oci_reader
@@ -40,12 +39,6 @@ def main() -> int:
             findings.extend(k8s_reader.read_findings(cfg))
         except Exception:  # pylint: disable=broad-except
             logger.exception("K8s reader failed — continuing with other readers")
-
-    if cfg.enable_gitlab_reader:
-        try:
-            findings.extend(gitlab_reader.read_findings(cfg))
-        except Exception:  # pylint: disable=broad-except
-            logger.exception("GitLab reader failed — continuing with other readers")
 
     if cfg.enable_layer1_reader:
         try:
