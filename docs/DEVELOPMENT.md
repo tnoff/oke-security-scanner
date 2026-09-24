@@ -62,6 +62,7 @@ The scanner is configured entirely via environment variables. All variables are 
 | Variable | Default | Description |
 |---|---|---|
 | `DISCORD_WEBHOOK_URL` | _(disabled)_ | Webhook URL; notifications are skipped if unset |
+| `DISCORD_CLEANUP_WEBHOOK_URL` | _(falls back to `DISCORD_WEBHOOK_URL`)_ | Separate webhook for cleanup recommendations / deletion results |
 
 ### OCIR cleanup
 
@@ -70,6 +71,8 @@ The scanner is configured entirely via environment variables. All variables are 
 | `OCIR_CLEANUP_ENABLED` | `false` | Delete old images (dry-run when `false`) |
 | `OCIR_CLEANUP_KEEP_COUNT` | `5` | Number of most-recent tags to keep per repository |
 | `OCIR_EXTRA_REPOSITORIES` | _(empty)_ | Comma-separated extra OCIR repos to include in cleanup |
+| `CLEANUP_PROTECT_TAGS_REGEX` | _(empty)_ | Tags whose name fully matches are excluded from the deletion pool |
+| `CLEANUP_GROUP_BY_REGEX` | _(empty)_ | When set, the candidate pool is grouped by the first capture group and `keep_count` is applied per group |
 | `ENABLE_SCAN` | `true` | Run the Trivy scan phase |
 | `ENABLE_CLEANUP` | `true` | Run the OCIR cleanup phase |
 | `CLEANUP_REPO` | _(empty)_ | Scope the cleanup phase to one OCIR repo, e.g. `tnoff/discord_bot` (see README) |

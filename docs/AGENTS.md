@@ -2,7 +2,7 @@
 
 Context for AI agents (Claude, GPT, etc.) working on this codebase.
 
-For **what the project does**, **how to install/run it**, **env-var reference**, **authentication setup**, and the **Kubernetes deployment shape**, read [README.md](./README.md). For **local-dev setup** and the **DEV env-var reference**, read [DEVELOPMENT.md](./DEVELOPMENT.md). This file covers only the things an agent needs that aren't in those docs.
+For **what the project does**, **how to install/run it**, **env-var reference**, **authentication setup**, and the **Kubernetes deployment shape**, read [README.md](../README.md). For **local-dev setup** and the **DEV env-var reference**, read [DEVELOPMENT.md](./DEVELOPMENT.md). This file covers only the things an agent needs that aren't in those docs.
 
 ## File Structure
 
@@ -16,17 +16,24 @@ oke-security-scanner/
 │   ├── k8s_client.py        # Kubernetes API client for image discovery
 │   ├── scanner.py           # Trivy scanner wrapper
 │   ├── registry_client.py   # OCIR cleanup + orphan-manifest detection
-│   └── discord_notifier.py  # Discord webhook notifications
+│   ├── discord_notifier.py  # Discord webhook notifications
+│   └── secret_age/          # Secret-age Tracker sub-package, own CronJob + entry point
+│       ├── main.py, __main__.py, config.py, aggregator.py, finding.py, discord_report.py
+│       └── readers/         # k8s.py, layer1_ledger.py, oci_iam.py -- one per secret source
 ├── tests/                # Pytest suite (100% line coverage)
 ├── k8s/                  # CronJob + RBAC + Secret examples
 ├── .github/workflows/    # GitHub Actions: ci.yml, release.yml, scheduled.yml
-├── Dockerfile            # Two-stage build (trivy-builder + slim runtime)
+├── Dockerfile            # Three-stage build (trivy-builder + py-builder + slim runtime)
 ├── pyproject.toml        # Python deps, build metadata, pylint config
 ├── tox.ini               # pytest / pylint / bandit envs
 ├── VERSION               # Semantic version
 ├── README.md             # User-facing documentation
-├── DEVELOPMENT.md        # Local-dev setup
-└── AGENTS.md             # This file
+├── mkdocs.yml            # Backstage TechDocs site config
+└── docs/
+    ├── README.md         # Symlink to ../README.md (single copy for GitHub + TechDocs)
+    ├── DEVELOPMENT.md    # Local-dev setup
+    ├── AGENTS.md         # This file
+    └── CONTRIBUTING.md   # Canonical-remote statement
 ```
 
 ## Observability Pattern
@@ -95,6 +102,7 @@ Key methods:
 - `get_old_ocir_images(images, keep_count, extra_repositories)` — returns `CleanupRecommendation`s of old commit-hash tags eligible for deletion, while preserving the deployed tag, `latest`, the newest `keep_count` tags, and any sub-manifests of kept tags.
 - `get_orphaned_manifests(images, extra_repositories)` — finds `unknown@sha256:...` platform manifests no longer referenced by any tagged manifest list.
 - `delete_ocir_images(cleanup_recommendations)` — deletes by OCID; 404s are treated as already-deleted. Returns `list[Image]` (returns `[]` when SDK unavailable — **not** `{}`).
+- `get_image_creation_date(image) -> Optional[datetime]` — public, but not called anywhere in `src/`; only `tests/test_registry_client.py` exercises it. Don't assume something calls this in production.
 
 Safety guards:
 - Only OCIR images are considered (`image.is_ocir_image`).
@@ -107,7 +115,7 @@ Safety guards:
 Three public methods:
 - `send_image_scan_report(complete_scan_result)`
 - `send_cleanup_recommendations(cleanup)`
-- `send_deletion_results(images, is_orphaned=False)`
+- `send_deletion_results(images, scanned_repos=None, is_orphaned=False)` — `scanned_repos` drives the "No `<repo>` ... deleted" reporting for clean repos
 
 **Library API**: this uses `dappertable` v1.1.x — `Column` / `Columns`, `DapperTable(columns=Columns([...]))`, `.render()`, `len(table)`. The older `DapperTableHeader` / `DapperTableHeaderOptions` / `.print()` / `.size` API is gone.
 
@@ -115,9 +123,10 @@ All values passed to `add_row` should be strings. Each paginated page is sent as
 
 ## Docker Image
 
-Two-stage Dockerfile:
+Three-stage Dockerfile:
 1. `trivy-builder` — `python:3.14-slim` + `curl` + `ca-certificates`, runs the official Trivy install script and drops the pinned `trivy` binary in `/usr/local/bin/`.
-2. Final stage — `python:3.14-slim`, applies security upgrades, copies the trivy binary from the builder, installs Python deps via `pip install --no-cache-dir .`, copies `src/`, runs as non-root `scanner` (UID 1000).
+2. `py-builder` — `python:3.14-slim` + `build-essential`, runs `pip install --no-cache-dir --prefix=/install .` to compile Python deps that don't ship aarch64 wheels for this runtime (e.g. `crc32c`, a transitive dep of `oci` 2.178+). `build-essential` never leaves this stage.
+3. Final stage — `python:3.14-slim`, applies security upgrades, copies the `trivy` binary from `trivy-builder` and the installed packages from `py-builder`'s `/install` (`COPY --from=py-builder /install /usr/local`, no `pip install` in the final stage), copies `src/`, runs as non-root `scanner` (UID 1000).
 
 The final image carries **no** `curl` / `wget` / `tar` / `git` / build toolchain. The Trivy DB is **not** pre-downloaded — `main()` fetches it on startup. Trivy version is pinned via `ARG TRIVY_VERSION` in the builder stage.
 
@@ -125,11 +134,11 @@ The final image carries **no** `curl` / `wget` / `tar` / `git` / build toolchain
 
 The project uses **GitHub Actions**. `.github/workflows/` holds three callers:
 
-- `ci.yml` — on pull requests: trufflehog secret scan, the tox matrix (pytest + pylint + bandit across Python 3.11–3.14) with a diff-cover gate, a conditional image build + image scan, plus `bump-version` and Renovate auto-approve.
+- `ci.yml` — on pull requests: trufflehog secret scan, the tox matrix (pytest + pylint + bandit across Python 3.11–3.14) with a diff-cover gate, a conditional image build + image scan, `bump-version`, and `check-workflow-contracts` (catches a `uses:` whose inputs/secrets no longer match the pinned callee).
 - `release.yml` — on `main`: fold the changelog, tag from `VERSION`, push the image to OCIR, and trigger the `docker-apps` pin bump.
 - `scheduled.yml` — weekly: Renovate and branch cleanup.
 
-Each job calls a reusable workflow from `tnoff/github-workflows`, SHA-pinned in `uses:` and kept current by Renovate's github-actions manager. `.gitlab-ci.yml` is frozen in place for history and no longer runs.
+Each job calls a reusable workflow from `tnoff/github-workflows`, SHA-pinned in `uses:` and kept current by Renovate's github-actions manager. There is no `.gitlab-ci.yml` in this repo -- `ci.yml`'s own header notes it was ported from one, but the file itself isn't present, frozen or otherwise.
 
 ## Code Quality
 
