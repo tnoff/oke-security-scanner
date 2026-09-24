@@ -10,7 +10,7 @@ Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes
 | OCIR Image Cleanup | Yes | Deletes old OCIR tags beyond a configurable `keep_count`, while protecting the deployed tag, `latest`, and any multi-arch sub-manifest digests referenced by kept tags |
 | Orphan Manifest Cleanup | Yes | Detects and removes `unknown@sha256:...` platform manifests in OCIR whose digest is no longer referenced by any tagged manifest list |
 | Cache Management | No | Automatic cleanup of Trivy image cache after each scan to minimize disk usage |
-| Secret-age Tracker | Yes | Reports secrets ≥90 days old across OCI IAM credentials, Kubernetes Secrets — including `docker-apps` SealedSecrets, via the `secret-age-tracker.tnoff/last-rotated` annotation on their target Secret — and operator-tracked admin tfvars (via a layer-1 ledger ConfigMap). Sibling package `src/secret_age/` with its own CronJob — see `docs/projects/secret-age-tracker.md`. Invoked as `python -m src.secret_age`. |
+| Secret-age Tracker | Yes | Reports secrets ≥90 days old across OCI IAM credentials, Kubernetes Secrets — including `docker-apps` SealedSecrets, via the `secret-age-tracker.tnoff/last-rotated` annotation on their target Secret — and operator-tracked admin tfvars (via a layer-1 ledger ConfigMap). Sibling package `src/secret_age/` with its own CronJob — see the [docs corpus](https://github.com/tnoff/docs)'s `docs/projects/secret-age-tracker.md` (a separate repo, not this one's own `docs/`). Invoked as `python -m src.secret_age`. |
 
 ## Install and Usage
 
@@ -21,7 +21,7 @@ $ pip install .
 $ python -m src.main
 ```
 
-See [DEVELOPMENT.md](./DEVELOPMENT.md) for full local setup instructions (including the `[dev]` extras for running tests / linting).
+See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for full local setup instructions (including the `[dev]` extras for running tests / linting).
 
 Or use the docker build:
 
@@ -77,7 +77,7 @@ This approach:
 - Avoids re-downloading the vulnerability database for each scan
 - Ensures cleanup happens even if scans fail or timeout
 
-The Trivy cache is located at `~/.cache/trivy/` (or `$TRIVY_CACHE_DIR` if set).
+The Trivy cache is located at `~/.cache/trivy/` (the Docker image sets `TRIVY_CACHE_DIR` to this by default). Note this is Trivy's own env var, read by the `trivy` binary -- this app's cache-cleanup code does not read it and always cleans `~/.cache/trivy/`, so overriding `TRIVY_CACHE_DIR` away from the default would point Trivy at a location the cleanup logic no longer manages.
 
 ## Configuration
 

@@ -1,14 +1,12 @@
 # Backstage catalog descriptor. Discovered automatically -- the portal's GitHub
 # provider reads catalog-info.yaml from the default branch of every repo the
 # tnoff-backstage App can see, so adding this file is the whole of onboarding.
-# Nothing needs registering by hand, and it appears on the next 3h sweep.
 #
-# No annotations, deliberately. github.com/project-slug is DERIVED: the portal
-# registers AnnotateScmSlugEntityProcessor, which reads the slug off the location
-# this file was fetched from, so writing one here would duplicate something that
-# cannot go stale. The rest -- backstage.io/techdocs-ref, the kubernetes
-# selectors, the grafana selectors -- each assert that a target EXISTS, and none
-# of those targets do yet. They arrive with the plugins that read them.
+# github.com/project-slug is DERIVED by the portal's
+# AnnotateScmSlugEntityProcessor from the location this file was fetched from.
+# techdocs-ref is set below now that mkdocs.yml + docs/ exist; the kubernetes
+# / grafana selectors still assert targets that don't exist yet, so they stay
+# out until those plugins are wired up.
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
@@ -19,6 +17,8 @@ metadata:
     docker-apps runs it three times from apps/security-scanner: security-scanner (Trivy,
     daily 11:00), cleanup-all (OCIR prune, daily 03:00) and secret-age-tracker (Sundays
     12:00), each its own Component in that repo.
+  annotations:
+    backstage.io/techdocs-ref: dir:.
   # `library` rather than `service`, changed once those three CronJob Components existed.
   #
   # Same call, same reasoning, as database-backup#226: while nothing in the catalog
@@ -40,3 +40,6 @@ spec:
   type: library
   owner: group:default/admin
   lifecycle: production
+  dependsOn:
+    - component:default/dappertable
+    - component:default/github-workflows
