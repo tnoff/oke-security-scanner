@@ -8,7 +8,7 @@ For **what the project does**, **how to install/run it**, **env-var reference**,
 
 ```
 oke-security-scanner/
-├── src/
+├── src/                  # scan + cleanup, still one combined package/image
 │   ├── __init__.py
 │   ├── main.py              # Entry point, orchestrates scanning workflow
 │   ├── config.py            # Environment variable configuration
@@ -16,16 +16,26 @@ oke-security-scanner/
 │   ├── k8s_client.py        # Kubernetes API client for image discovery
 │   ├── scanner.py           # Trivy scanner wrapper
 │   ├── registry_client.py   # OCIR cleanup + orphan-manifest detection
-│   ├── discord_notifier.py  # Discord webhook notifications
-│   └── secret_age/          # Secret-age Tracker sub-package, own CronJob + entry point
-│       ├── main.py, __main__.py, config.py, aggregator.py, finding.py, discord_report.py
-│       └── readers/         # k8s.py, layer1_ledger.py, oci_iam.py -- one per secret source
-├── tests/                # Pytest suite (100% line coverage)
+│   └── discord_notifier.py  # Discord webhook notifications
+├── packages/             # Separate installable packages/images -- see
+│   │                     # docs/projects/oke-security-scanner-package-split.md
+│   ├── core/             # oke-scanner-core: shared k8s auth bootstrap only.
+│   │   └── src/oke_scanner_core/k8s_auth.py
+│   └── secret_age/       # secret-age-tracker: own package, own Dockerfile, own
+│       │                 # CronJob + entry point (`python -m secret_age`).
+│       │                 # No Trivy, no OCIR cleanup code, no OpenTelemetry.
+│       ├── Dockerfile
+│       ├── pyproject.toml
+│       ├── src/secret_age/
+│       │   ├── main.py, __main__.py, config.py, aggregator.py, finding.py, discord_report.py
+│       │   └── readers/  # k8s.py, layer1_ledger.py, oci_iam.py -- one per secret source
+│       └── tests/
+├── tests/                # Pytest suite for src/ (100% line coverage)
 ├── k8s/                  # CronJob + RBAC + Secret examples
 ├── .github/workflows/    # GitHub Actions: ci.yml, release.yml, scheduled.yml
-├── Dockerfile            # Three-stage build (trivy-builder + py-builder + slim runtime)
+├── Dockerfile            # scan+cleanup image: three-stage build (trivy-builder + py-builder + slim runtime)
 ├── pyproject.toml        # Python deps, build metadata, pylint config
-├── tox.ini               # pytest / pylint / bandit envs
+├── tox.ini               # pytest / pylint / bandit envs -- covers src/ AND packages/*/src, see its own header comment
 ├── VERSION               # Semantic version
 ├── README.md             # User-facing documentation
 ├── mkdocs.yml            # Backstage TechDocs site config
@@ -123,6 +133,10 @@ All values passed to `add_row` should be strings. Each paginated page is sent as
 
 ## Docker Image
 
+Two images now (see `packages/secret_age/Dockerfile` for the other one, no
+Trivy stage, no OpenTelemetry deps). This section covers the root
+`Dockerfile` — the combined scan+cleanup image.
+
 Three-stage Dockerfile:
 1. `trivy-builder` — `python:3.14-slim` + `curl` + `ca-certificates`, runs the official Trivy install script and drops the pinned `trivy` binary in `/usr/local/bin/`.
 2. `py-builder` — `python:3.14-slim` + `build-essential`, runs `pip install --no-cache-dir --prefix=/install .` to compile Python deps that don't ship aarch64 wheels for this runtime (e.g. `crc32c`, a transitive dep of `oci` 2.178+). `build-essential` never leaves this stage.
@@ -134,8 +148,8 @@ The final image carries **no** `curl` / `wget` / `tar` / `git` / build toolchain
 
 The project uses **GitHub Actions**. `.github/workflows/` holds three callers:
 
-- `ci.yml` — on pull requests: trufflehog secret scan, the tox matrix (pytest + pylint + bandit across Python 3.11–3.14) with a diff-cover gate, a conditional image build + image scan, `bump-version`, and `check-workflow-contracts` (catches a `uses:` whose inputs/secrets no longer match the pinned callee).
-- `release.yml` — on `main`: fold the changelog, tag from `VERSION`, push the image to OCIR, and trigger the `docker-apps` pin bump.
+- `ci.yml` — on pull requests: trufflehog secret scan, the tox matrix (pytest + pylint + bandit across Python 3.11–3.14) with a diff-cover gate, a conditional image build + image scan for EACH image (`changes` job outputs `image` for the root Dockerfile and `secret_age_image` for `packages/secret_age/Dockerfile`, gated on separate path filters -- not a matrix, so each has its own `needs`/`if`), `bump-version`, and `check-workflow-contracts` (catches a `uses:` whose inputs/secrets no longer match the pinned callee).
+- `release.yml` — on `main`: fold the changelog, tag from `VERSION` (shared across both images), push each changed image to OCIR under its own OCIR repo name, and trigger a `docker-apps` pin bump per image (`oke-security-scanner` and `secret-age-tracker` are separate `bump_source`s).
 - `scheduled.yml` — weekly: Renovate and branch cleanup.
 
 Each job calls a reusable workflow from `tnoff/github-workflows`, SHA-pinned in `uses:` and kept current by Renovate's github-actions manager. There is no `.gitlab-ci.yml` in this repo -- `ci.yml`'s own header notes it was ported from one, but the file itself isn't present, frozen or otherwise.

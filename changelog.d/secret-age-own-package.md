@@ -1,0 +1,2 @@
+- secret-age-tracker now ships as its own installable package (`packages/secret_age/`) with its own image, built from `packages/secret_age/Dockerfile`. Its pod no longer pulls the Trivy binary or the OpenTelemetry SDK/exporters — measured 810.8 MB (combined image) vs 630.5 MB (dedicated).
+- Extracted the shared k8s in-cluster/kubeconfig-fallback auth bootstrap into a new minimal `packages/core/` package (`oke-scanner-core`), used by `packages/secret_age`.

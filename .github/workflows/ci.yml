@@ -98,12 +98,19 @@ jobs:
       contents: read
     outputs:
       image: ${{ steps.filter.outputs.image }}
+      secret_age_image: ${{ steps.filter.outputs.secret_age_image }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
+      # Two images, two independent filters -- not a matrix. Only two
+      # producers exist today (the combined scan+cleanup image, and
+      # secret-age's own), so a hand-written pair is proportionate; see
+      # discord-bot's measured-import-closure module for what this looks
+      # like at six images, and don't reach for that machinery before it's
+      # needed.
       - name: Filter
         id: filter
         env:
@@ -111,15 +118,20 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags --quiet origin "${BASE_REF}"
-          MATCH=false
+          FILES="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
+          IMAGE=false
+          SECRET_AGE_IMAGE=false
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              Dockerfile|pyproject.toml|src/*) MATCH=true; break ;;
+              Dockerfile|pyproject.toml|src/*) IMAGE=true ;;
+              packages/core/*|packages/secret_age/*) SECRET_AGE_IMAGE=true ;;
             esac
-          done <<< "$(git diff --name-only "origin/${BASE_REF}...HEAD")"
-          echo "image inputs changed: ${MATCH}"
-          echo "image=${MATCH}" >> "$GITHUB_OUTPUT"
+          done <<< "${FILES}"
+          echo "image inputs changed: ${IMAGE}"
+          echo "secret-age image inputs changed: ${SECRET_AGE_IMAGE}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "secret_age_image=${SECRET_AGE_IMAGE}" >> "$GITHUB_OUTPUT"
 
   # GitLab ran the build and the image scan as two jobs, shipping the image
   # between them as a tarball through an object-storage bucket.
@@ -133,6 +145,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.image == 'true'
     uses: tnoff/github-workflows/.github/workflows/docker-build-check.yml@bad6dacd6d4d75b465314b1ec984efd86cc8f5e6
+
+  build-secret-age:
+    name: Build and scan secret-age image
+    needs: changes
+    if: needs.changes.outputs.secret_age_image == 'true'
+    uses: tnoff/github-workflows/.github/workflows/docker-build-check.yml@bad6dacd6d4d75b465314b1ec984efd86cc8f5e6
+    with:
+      dockerfile: packages/secret_age/Dockerfile
 
   bump-version:
     name: Bump version
@@ -181,19 +201,20 @@ jobs:
     # This job always runs and its name never changes, so the ruleset requires
     # exactly one context and the jobs underneath stay free to change.
     if: always()
-    needs: [secrets, tox, changes, build, contracts, metadata]
+    needs: [secrets, tox, changes, build, build-secret-age, contracts, metadata]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
       - name: Summarise
         run: |
-          echo "secrets:   ${{ needs.secrets.result }}"
-          echo "metadata:  ${{ needs.metadata.result }}"
-          echo "tox:       ${{ needs.tox.result }}"
-          echo "changes:   ${{ needs.changes.result }}"
-          echo "build:     ${{ needs.build.result }}"
-          echo "contracts: ${{ needs.contracts.result }}"
+          echo "secrets:            ${{ needs.secrets.result }}"
+          echo "metadata:           ${{ needs.metadata.result }}"
+          echo "tox:                ${{ needs.tox.result }}"
+          echo "changes:            ${{ needs.changes.result }}"
+          echo "build:              ${{ needs.build.result }}"
+          echo "build-secret-age:   ${{ needs['build-secret-age'].result }}"
+          echo "contracts:          ${{ needs.contracts.result }}"
 
       - name: Fail if any job failed
         # `skipped` is deliberately allowed: with allow_fork_prs false a fork
@@ -203,6 +224,7 @@ jobs:
           needs.tox.result == 'failure' || needs.tox.result == 'cancelled' ||
           needs.changes.result == 'failure' || needs.changes.result == 'cancelled' ||
           needs.build.result == 'failure' || needs.build.result == 'cancelled' ||
+          needs['build-secret-age'].result == 'failure' || needs['build-secret-age'].result == 'cancelled' ||
           needs.contracts.result == 'failure' || needs.contracts.result == 'cancelled' ||
           needs.metadata.result == 'failure' || needs.metadata.result == 'cancelled'
         run: |

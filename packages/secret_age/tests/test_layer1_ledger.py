@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch
 
 from kubernetes import client as k8s_client
 
-from src.secret_age.finding import Layer, Severity
-from src.secret_age.readers.layer1_ledger import _parse_ledger_date, read_findings
+from secret_age.finding import Layer, Severity
+from secret_age.readers.layer1_ledger import _parse_ledger_date, read_findings
 
 
 def test_parse_bare_date():
@@ -41,10 +41,8 @@ def test_read_findings_no_configmap(cfg):
     api = Mock()
     err = k8s_client.exceptions.ApiException(status=404, reason="Not Found")
     api.read_namespaced_config_map.side_effect = err
-    with patch("src.secret_age.readers.layer1_ledger.k8s_config") as kc, \
-         patch("src.secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=api):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.layer1_ledger.load_k8s_config"), \
+         patch("secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=api):
         findings = read_findings(cfg)
     assert findings == []
 
@@ -54,10 +52,8 @@ def test_read_findings_emits_per_ledger_entry(cfg):
         "discord_token": "2025-01-01T00:00:00Z",  # very old → ROTATE
         "ssh_public_key": "2026-06-01",  # recent
     }
-    with patch("src.secret_age.readers.layer1_ledger.k8s_config") as kc, \
-         patch("src.secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=_api_with(data)):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.layer1_ledger.load_k8s_config"), \
+         patch("secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=_api_with(data)):
         findings = read_findings(cfg)
     assert len(findings) == 2
     assert all(f.layer == Layer.LAYER1_LEDGER for f in findings)
@@ -67,30 +63,25 @@ def test_read_findings_emits_per_ledger_entry(cfg):
 
 def test_read_findings_skips_malformed_dates(cfg):
     data = {"good_var": "2026-06-01", "bad_var": "tomorrow"}
-    with patch("src.secret_age.readers.layer1_ledger.k8s_config") as kc, \
-         patch("src.secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=_api_with(data)):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.layer1_ledger.load_k8s_config"), \
+         patch("secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=_api_with(data)):
         findings = read_findings(cfg)
     assert len(findings) == 1
     assert findings[0].identifier == "tfvar good_var"
 
 
 def test_read_findings_handles_empty_configmap(cfg):
-    with patch("src.secret_age.readers.layer1_ledger.k8s_config") as kc, \
-         patch("src.secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=_api_with(None)):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.layer1_ledger.load_k8s_config"), \
+         patch("secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=_api_with(None)):
         findings = read_findings(cfg)
     assert findings == []
 
 
-def test_read_findings_kubeconfig_fallback(cfg):
+def test_read_findings_loads_k8s_config(cfg):
+    # The incluster/kubeconfig-fallback behavior itself is oke_scanner_core's
+    # own responsibility and coverage; this only checks read_findings wires it in.
     api = _api_with({"x": "2026-01-01"})
-    with patch("src.secret_age.readers.layer1_ledger.k8s_config") as kc, \
-         patch("src.secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=api):
-        kc.ConfigException = Exception
-        kc.load_incluster_config.side_effect = kc.ConfigException("not in cluster")
-        kc.load_kube_config.return_value = None
+    with patch("secret_age.readers.layer1_ledger.load_k8s_config") as load_config, \
+         patch("secret_age.readers.layer1_ledger.client.CoreV1Api", return_value=api):
         read_findings(cfg)
-    kc.load_kube_config.assert_called_once()
+    load_config.assert_called_once()

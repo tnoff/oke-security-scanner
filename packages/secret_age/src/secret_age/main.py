@@ -1,6 +1,6 @@
 """Entrypoint for the secret-age tracker CronJob.
 
-Invoked as `python -m src.secret_age` from the CronJob's `command:`.
+Invoked as `python -m secret_age` from the CronJob's `command:`.
 """
 
 import logging

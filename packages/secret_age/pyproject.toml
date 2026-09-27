@@ -3,19 +3,13 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "oke-security-scanner"
-# Single source of truth: read from the VERSION file (CI bumps it via the
-# bump-version job in .github/workflows/ci.yml; release.yml tags from it).
-dynamic = ["version"]
+name = "secret-age-tracker"
+version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    "oke-scanner-core",
     "kubernetes==36.0.3",
     "oci==2.185.0",
-    "opentelemetry-api",
-    "opentelemetry-sdk==1.44.0",
-    "opentelemetry-exporter-otlp",
-    "opentelemetry-instrumentation",
-    "opentelemetry-instrumentation-logging",
     "requests",
     # dappertable is GitHub-canonical. The GitLab copy still resolves, but its
     # tags stop at v1.1.5 while GitHub is on v1.1.6, so this pin could never be
@@ -26,21 +20,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "bandit",
-    "coverage==7.16.2",
     "pylint==4.0.9",
-    "tox==4.64.1",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "pytest-mock==3.15.1",
-    "pytest-asyncio==1.4.0",
 ]
 
-[tool.setuptools.dynamic]
-version = { file = "VERSION" }
-
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+where = ["src"]
 
 [tool.pylint.main]
 jobs = 0

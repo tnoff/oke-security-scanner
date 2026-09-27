@@ -2,7 +2,7 @@
 
 import os
 
-from src.secret_age.config import SecretAgeConfig
+from secret_age.config import SecretAgeConfig
 
 
 def test_defaults_when_env_empty(monkeypatch):

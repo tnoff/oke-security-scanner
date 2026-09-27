@@ -13,7 +13,8 @@ SA doesn't inadvertently gain Secret read access.
 from datetime import date, datetime, timezone
 from logging import getLogger
 
-from kubernetes import client, config as k8s_config
+from kubernetes import client
+from oke_scanner_core.k8s_auth import load_k8s_config
 
 from ..config import SecretAgeConfig
 from ..finding import Finding, Layer, Severity
@@ -93,11 +94,7 @@ def _expiry_finding(s, annotations: dict, today: date, cfg: SecretAgeConfig) -> 
 
 def read_findings(cfg: SecretAgeConfig) -> list[Finding]:
     """Enumerate K8s Secrets and emit a Finding per non-system secret."""
-    try:
-        k8s_config.load_incluster_config()
-    except k8s_config.ConfigException:
-        # Local-dev fallback so the reader works outside the cluster too.
-        k8s_config.load_kube_config()
+    load_k8s_config()
 
     v1 = client.CoreV1Api()
     secrets = v1.list_secret_for_all_namespaces(watch=False).items

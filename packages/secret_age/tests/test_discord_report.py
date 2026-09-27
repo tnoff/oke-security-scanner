@@ -5,9 +5,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.secret_age.aggregator import aggregate
-from src.secret_age.discord_report import send_report, _build_csv, _format_chunks, _table
-from src.secret_age.finding import Finding, Layer, Severity
+from secret_age.aggregator import aggregate
+from secret_age.discord_report import send_report, _build_csv, _format_chunks, _table
+from secret_age.finding import Finding, Layer, Severity
 
 
 def _fix(identifier="x", layer=Layer.OCI_IAM, age=10, severity=Severity.OK,
@@ -21,7 +21,7 @@ def _fix(identifier="x", layer=Layer.OCI_IAM, age=10, severity=Severity.OK,
 
 def test_send_report_skips_when_no_webhook_url():
     report = aggregate([])
-    with patch("src.secret_age.discord_report.requests.post") as p:
+    with patch("secret_age.discord_report.requests.post") as p:
         send_report("", report)
     p.assert_not_called()
 
@@ -31,7 +31,7 @@ def test_send_report_posts_when_webhook_url_set():
     report = aggregate(findings)
     mock_resp = Mock(status_code=200)
     mock_resp.raise_for_status.return_value = None
-    with patch("src.secret_age.discord_report.requests.post", return_value=mock_resp) as p:
+    with patch("secret_age.discord_report.requests.post", return_value=mock_resp) as p:
         send_report("https://discord.test/hook", report)
     assert p.call_count >= 1
     # Message chunks post JSON; the trailing CSV attachment posts multipart
@@ -49,7 +49,7 @@ def test_send_report_attaches_full_detail_csv():
     report = aggregate(findings)
     mock_resp = Mock(status_code=200)
     mock_resp.raise_for_status.return_value = None
-    with patch("src.secret_age.discord_report.requests.post", return_value=mock_resp) as p:
+    with patch("secret_age.discord_report.requests.post", return_value=mock_resp) as p:
         send_report("https://discord.test/hook", report)
     file_calls = [c for c in p.call_args_list if "files" in c.kwargs]
     assert len(file_calls) == 1
@@ -83,7 +83,7 @@ def test_send_report_raises_on_4xx():
     report = aggregate(findings)
     mock_resp = Mock()
     mock_resp.raise_for_status.side_effect = Exception("400 Bad Request")
-    with patch("src.secret_age.discord_report.requests.post", return_value=mock_resp):
+    with patch("secret_age.discord_report.requests.post", return_value=mock_resp):
         with pytest.raises(Exception, match="400"):
             send_report("https://discord.test/hook", report)
 
