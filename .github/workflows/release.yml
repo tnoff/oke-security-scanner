@@ -55,12 +55,16 @@ jobs:
       contents: read
     outputs:
       image: ${{ steps.filter.outputs.image }}
+      secret_age_image: ${{ steps.filter.outputs.secret_age_image }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
+      # Keep in lockstep with ci.yml's copy of this filter -- see that file's
+      # header comment on why drift here is the way an image ships that its
+      # own merge then refuses to rebuild.
       - name: Filter
         id: filter
         env:
@@ -73,20 +77,25 @@ jobs:
              || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
             echo "no usable base ref (${BEFORE:-empty}) -- building"
             echo "image=true" >> "$GITHUB_OUTPUT"
+            echo "secret_age_image=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           FILES="$(git diff --name-only "${BEFORE}" "${AFTER}")"
-          MATCH=false
+          IMAGE=false
+          SECRET_AGE_IMAGE=false
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              Dockerfile|pyproject.toml|src/*) MATCH=true; break ;;
+              Dockerfile|pyproject.toml|src/*) IMAGE=true ;;
+              packages/core/*|packages/secret_age/*) SECRET_AGE_IMAGE=true ;;
             esac
           done <<< "${FILES}"
           echo "changed files:"
           printf '%s\n' "${FILES}" | sed -n 's/^/  /p'
-          echo "image inputs changed: ${MATCH}"
-          echo "image=${MATCH}" >> "$GITHUB_OUTPUT"
+          echo "image inputs changed: ${IMAGE}"
+          echo "secret-age image inputs changed: ${SECRET_AGE_IMAGE}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "secret_age_image=${SECRET_AGE_IMAGE}" >> "$GITHUB_OUTPUT"
 
   assemble-changelog:
     name: Assemble changelog
@@ -137,6 +146,40 @@ jobs:
       bump_source: oke-security-scanner
       image: ${{ needs.push-image.outputs.image }}
       image_tag: ${{ needs.push-image.outputs.secondary_tag }}
+    secrets:
+      app_client_id: ${{ secrets.CI_APP_CLIENT_ID }}
+      app_private_key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+
+  # A separate explicit job, not a matrix leg: matrix job outputs aren't
+  # addressable per-leg (needs.push.outputs[matrix.image] doesn't exist), and
+  # trigger-bump needs the exact tag its own paired push produced -- deriving
+  # that independently is how a pin ends up pointing at a tag that was never
+  # written. Same shape discord-bot uses for its own per-image push/bump pairs.
+  push-image-secret-age:
+    name: Push secret-age image
+    needs: changes
+    if: >-
+      ${{ needs.changes.outputs.secret_age_image == 'true'
+          && !startsWith(github.event.head_commit.message, 'docs: assemble changelog') }}
+    uses: tnoff/github-workflows/.github/workflows/docker-push.yml@bad6dacd6d4d75b465314b1ec984efd86cc8f5e6
+    with:
+      registry: ${{ vars.OCI_REGISTRY }}
+      namespace: ${{ vars.OCI_NAMESPACE }}
+      repo_name: secret_age_tracker
+      dockerfile: packages/secret_age/Dockerfile
+    secrets:
+      oci_username: ${{ secrets.OCI_USERNAME }}
+      oci_token: ${{ secrets.OCI_TOKEN }}
+
+  trigger-bump-secret-age:
+    name: Trigger docker-apps bump (secret-age)
+    needs: push-image-secret-age
+    uses: tnoff/github-workflows/.github/workflows/trigger-bump-dispatch.yml@bad6dacd6d4d75b465314b1ec984efd86cc8f5e6
+    # Rewrites the pin in docker-apps apps/security-scanner/secret-age-tracker-cronjob.yaml.
+    with:
+      bump_source: secret-age-tracker
+      image: ${{ needs.push-image-secret-age.outputs.image }}
+      image_tag: ${{ needs.push-image-secret-age.outputs.secondary_tag }}
     secrets:
       app_client_id: ${{ secrets.CI_APP_CLIENT_ID }}
       app_private_key: ${{ secrets.CI_APP_PRIVATE_KEY }}

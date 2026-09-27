@@ -1,4 +1,4 @@
-"""So `python -m src.secret_age` invokes main()."""
+"""So `python -m secret_age` invokes main()."""
 
 import sys  # pragma: no cover
 

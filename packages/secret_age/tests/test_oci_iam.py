@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from src.secret_age.finding import Layer, Severity
-from src.secret_age.readers.oci_iam import read_findings, _to_date, _grade
+from secret_age.finding import Layer, Severity
+from secret_age.readers.oci_iam import read_findings, _to_date, _grade
 
 
 def _make_token(time_created, **kwargs):
@@ -18,7 +18,7 @@ def _identity_mock(users, tokens=None, csk=None, api_keys=None):
     list_users_resp = Mock()
     list_users_resp.data = users
 
-    with patch("src.secret_age.readers.oci_iam.oci.pagination.list_call_get_all_results", return_value=list_users_resp):
+    with patch("secret_age.readers.oci_iam.oci.pagination.list_call_get_all_results", return_value=list_users_resp):
         pass
 
     identity.list_auth_tokens.return_value = SimpleNamespace(data=tokens or [])
@@ -71,9 +71,9 @@ def test_read_findings_emits_findings_per_credential(cfg):
 
     list_users_resp = SimpleNamespace(data=[user])
 
-    with patch("src.secret_age.readers.oci_iam.oci.config.from_file", return_value={}), \
-         patch("src.secret_age.readers.oci_iam.oci.identity.IdentityClient", return_value=identity), \
-         patch("src.secret_age.readers.oci_iam.oci.pagination.list_call_get_all_results",
+    with patch("secret_age.readers.oci_iam.oci.config.from_file", return_value={}), \
+         patch("secret_age.readers.oci_iam.oci.identity.IdentityClient", return_value=identity), \
+         patch("secret_age.readers.oci_iam.oci.pagination.list_call_get_all_results",
                return_value=list_users_resp):
         findings = read_findings(cfg)
 
@@ -95,9 +95,9 @@ def test_read_findings_zero_creds_user(cfg):
 
     list_users_resp = SimpleNamespace(data=[user])
 
-    with patch("src.secret_age.readers.oci_iam.oci.config.from_file", return_value={}), \
-         patch("src.secret_age.readers.oci_iam.oci.identity.IdentityClient", return_value=identity), \
-         patch("src.secret_age.readers.oci_iam.oci.pagination.list_call_get_all_results",
+    with patch("secret_age.readers.oci_iam.oci.config.from_file", return_value={}), \
+         patch("secret_age.readers.oci_iam.oci.identity.IdentityClient", return_value=identity), \
+         patch("secret_age.readers.oci_iam.oci.pagination.list_call_get_all_results",
                return_value=list_users_resp):
         findings = read_findings(cfg)
 

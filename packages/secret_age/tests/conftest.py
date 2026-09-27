@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.secret_age.config import SecretAgeConfig
+from secret_age.config import SecretAgeConfig
 
 
 @pytest.fixture

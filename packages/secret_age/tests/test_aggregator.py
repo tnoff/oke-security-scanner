@@ -2,8 +2,8 @@
 
 from datetime import date
 
-from src.secret_age.aggregator import aggregate
-from src.secret_age.finding import Finding, Layer, Severity
+from secret_age.aggregator import aggregate
+from secret_age.finding import Finding, Layer, Severity
 
 
 def _fix(identifier="x", layer=Layer.OCI_IAM, age=10, severity=Severity.OK):

@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from src.secret_age.finding import Severity
-from src.secret_age.readers.k8s import (
+from secret_age.finding import Severity
+from secret_age.readers.k8s import (
     read_findings, _grade, _to_date, ANNOTATION_KEY, EXPIRES_ANNOTATION,
     SENTINEL, _SKIP_SECRET_TYPES,
 )
@@ -46,20 +46,16 @@ def test_read_findings_skips_system_secret_types(cfg):
         _secret("helm-rel", "default", type_="helm.sh/release.v1"),
         _secret("bootstrap", "kube-system", type_="bootstrap.kubernetes.io/token"),
     ]
-    with patch("src.secret_age.readers.k8s.k8s_config") as kc, \
-         patch("src.secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.k8s.load_k8s_config"), \
+         patch("secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
         findings = read_findings(cfg)
     assert findings == []
 
 
 def test_read_findings_unknown_sentinel_surfaces(cfg):
     secrets = [_secret("flux-system-https", "flux-system", annotations={ANNOTATION_KEY: SENTINEL})]
-    with patch("src.secret_age.readers.k8s.k8s_config") as kc, \
-         patch("src.secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.k8s.load_k8s_config"), \
+         patch("secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
         findings = read_findings(cfg)
     assert len(findings) == 1
     assert findings[0].severity == Severity.UNKNOWN
@@ -73,10 +69,8 @@ def test_read_findings_annotation_overrides_creation_timestamp(cfg):
         annotations={ANNOTATION_KEY: "2025-01-01"},
         created=datetime(2026, 6, 1, tzinfo=timezone.utc),
     )]
-    with patch("src.secret_age.readers.k8s.k8s_config") as kc, \
-         patch("src.secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.k8s.load_k8s_config"), \
+         patch("secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
         findings = read_findings(cfg)
     assert len(findings) == 1
     assert findings[0].age_days > 180  # old per annotation
@@ -89,10 +83,8 @@ def test_read_findings_falls_back_to_creation_when_no_annotation(cfg):
         annotations=None,
         created=datetime(2026, 5, 1, tzinfo=timezone.utc),
     )]
-    with patch("src.secret_age.readers.k8s.k8s_config") as kc, \
-         patch("src.secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.k8s.load_k8s_config"), \
+         patch("secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
         findings = read_findings(cfg)
     assert len(findings) == 1
     assert "creationTimestamp" in findings[0].notes
@@ -103,10 +95,8 @@ def test_read_findings_malformed_annotation_skipped(cfg):
         "bad-anno", "default",
         annotations={ANNOTATION_KEY: "not-a-date"},
     )]
-    with patch("src.secret_age.readers.k8s.k8s_config") as kc, \
-         patch("src.secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.k8s.load_k8s_config"), \
+         patch("secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
         findings = read_findings(cfg)
     assert findings == []
 
@@ -117,10 +107,8 @@ def test_to_date_fallback_on_unknown_type():
 
 
 def _run(cfg, secrets):
-    with patch("src.secret_age.readers.k8s.k8s_config") as kc, \
-         patch("src.secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
-        kc.load_incluster_config.return_value = None
-        kc.ConfigException = Exception
+    with patch("secret_age.readers.k8s.load_k8s_config"), \
+         patch("secret_age.readers.k8s.client.CoreV1Api", return_value=_api_with(secrets)):
         return read_findings(cfg)
 
 
@@ -179,14 +167,13 @@ def test_expiry_annotation_sentinel_and_malformed_ignored(cfg):
     assert _expiry_findings(_run(cfg, secrets)) == []
 
 
-def test_read_findings_kubeconfig_fallback(cfg):
+def test_read_findings_loads_k8s_config(cfg):
+    # The incluster/kubeconfig-fallback behavior itself is oke_scanner_core's
+    # own responsibility and coverage; this only checks read_findings wires it in.
     secrets = []
     api = _api_with(secrets)
-    with patch("src.secret_age.readers.k8s.k8s_config") as kc, \
-         patch("src.secret_age.readers.k8s.client.CoreV1Api", return_value=api):
-        kc.ConfigException = Exception
-        kc.load_incluster_config.side_effect = kc.ConfigException("not in cluster")
-        kc.load_kube_config.return_value = None
+    with patch("secret_age.readers.k8s.load_k8s_config") as load_config, \
+         patch("secret_age.readers.k8s.client.CoreV1Api", return_value=api):
         findings = read_findings(cfg)
-    kc.load_kube_config.assert_called_once()
+    load_config.assert_called_once()
     assert findings == []

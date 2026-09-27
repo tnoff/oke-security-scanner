@@ -11,7 +11,8 @@ entry in the same commit that rotates the underlying secret.
 from datetime import date, datetime, timezone
 from logging import getLogger
 
-from kubernetes import client, config as k8s_config
+from kubernetes import client
+from oke_scanner_core.k8s_auth import load_k8s_config
 
 from ..config import SecretAgeConfig
 from ..finding import Finding, Layer, Severity
@@ -44,10 +45,7 @@ def _parse_ledger_date(s: str) -> date | None:
 
 
 def read_findings(cfg: SecretAgeConfig) -> list[Finding]:
-    try:
-        k8s_config.load_incluster_config()
-    except k8s_config.ConfigException:
-        k8s_config.load_kube_config()
+    load_k8s_config()
 
     v1 = client.CoreV1Api()
     try:
