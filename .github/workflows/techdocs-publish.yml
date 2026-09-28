@@ -24,6 +24,13 @@ concurrency:
   group: techdocs-publish
   cancel-in-progress: false
 
+# Without this, permissions default to whatever the repo/org falls back to
+# (potentially write-all) instead of being pinned explicitly. This workflow
+# only reads the repo and forwards S3 secrets to the reusable callee, so
+# contents: read covers everything it does.
+permissions:
+  contents: read
+
 jobs:
   publish:
     name: Generate and publish
