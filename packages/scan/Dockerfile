@@ -9,16 +9,18 @@ RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/
     sh -s -- -b /usr/local/bin ${TRIVY_VERSION}
 
 
-# No build-essential needed here now that `oci` (and its crc32c transitive
-# dep, the reason build-essential existed in this stage) moved out with
-# packages/cleanup -- scan no longer depends on the OCI SDK at all.
+# No build-essential needed here -- oci (and its crc32c transitive dep, the
+# reason build-essential existed in this stage) moved out with
+# packages/ocir_cleanup, and scan no longer depends on the OCI SDK at all.
+# Build context is the repo root so this stage can also COPY packages/core.
 FROM python:3.14-slim AS py-builder
 
 WORKDIR /build
-COPY pyproject.toml .
 COPY packages/core/pyproject.toml packages/core/pyproject.toml
 COPY packages/core/src packages/core/src
-RUN pip install --no-cache-dir --prefix=/install . ./packages/core
+COPY packages/scan/pyproject.toml packages/scan/pyproject.toml
+COPY packages/scan/src packages/scan/src
+RUN pip install --no-cache-dir --prefix=/install ./packages/core ./packages/scan
 
 
 FROM python:3.14-slim
@@ -36,12 +38,8 @@ COPY --from=py-builder /install /usr/local
 
 WORKDIR /app
 
-# Copy application code
-COPY src/ ./src/
-
 # Run as non-root user
 RUN useradd -m -u 1000 scanner && \
-    chown -R scanner:scanner /app && \
     mkdir -p /home/scanner/.cache/trivy && \
     chown -R scanner:scanner /home/scanner/.cache
 
@@ -50,4 +48,4 @@ USER scanner
 ENV PYTHONUNBUFFERED=1
 ENV TRIVY_CACHE_DIR=/home/scanner/.cache/trivy
 
-CMD ["python", "-m", "src.main"]
+CMD ["python", "-m", "scan"]

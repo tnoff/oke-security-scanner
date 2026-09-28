@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 import pytest
 from unittest.mock import Mock, patch
-from src.scanner import TrivyScanner, ScanResult, CVE, CVEDetails, CompleteScanResult
+from scan.scanner import TrivyScanner, ScanResult, CVE, CVEDetails, CompleteScanResult
 from oke_scanner_core.image import Image
 
 
@@ -25,7 +25,7 @@ class TestTrivyScanner:
     @pytest.fixture
     def scanner(self, config, logger_provider):
         """Create a TrivyScanner instance."""
-        with patch('src.scanner.logger'):
+        with patch('scan.scanner.logger'):
             return TrivyScanner(config, logger_provider)
 
     @pytest.fixture
@@ -123,7 +123,7 @@ class TestTrivyScanner:
 
         assert result is None
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_update_database_success(self, mock_run, scanner):
         """Test successful database update."""
         mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
@@ -134,7 +134,7 @@ class TestTrivyScanner:
         assert scanner.db_updated is True
         mock_run.assert_called_once()
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_update_database_timeout(self, mock_run, scanner):
         """Test database update timeout."""
         mock_run.side_effect = subprocess.TimeoutExpired("trivy", 120)
@@ -144,7 +144,7 @@ class TestTrivyScanner:
         assert result is False
         assert scanner.db_updated is False
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_update_database_error(self, mock_run, scanner):
         """Test database update error."""
         mock_run.side_effect = subprocess.CalledProcessError(
@@ -155,7 +155,7 @@ class TestTrivyScanner:
 
         assert result is False
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_success(self, mock_run, scanner, sample_trivy_results):
         """Test successful image scan."""
         mock_result = Mock()
@@ -173,7 +173,7 @@ class TestTrivyScanner:
         assert result.high_count == 1
         assert len(result.cves) == 3  # 3 unique CVEs
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_timeout(self, mock_run, scanner):
         """Test image scan timeout."""
         mock_run.side_effect = subprocess.TimeoutExpired("trivy", 300)
@@ -183,7 +183,7 @@ class TestTrivyScanner:
 
         assert result is None
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_process_error(self, mock_run, scanner):
         """Test image scan process error."""
         mock_run.side_effect = subprocess.CalledProcessError(
@@ -195,7 +195,7 @@ class TestTrivyScanner:
 
         assert result is None
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_json_decode_error(self, mock_run, scanner):
         """Test image scan with invalid JSON."""
         mock_result = Mock()
@@ -208,7 +208,7 @@ class TestTrivyScanner:
 
         assert result is None
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_command_includes_severity(self, mock_run, scanner, sample_trivy_results):
         """Test that scan command includes severity filter."""
         mock_result = Mock()
@@ -223,7 +223,7 @@ class TestTrivyScanner:
         assert "--severity" in call_args
         assert "CRITICAL,HIGH" in call_args
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_command_includes_timeout(self, mock_run, scanner, sample_trivy_results):
         """Test that scan command includes timeout."""
         mock_result = Mock()
@@ -238,11 +238,11 @@ class TestTrivyScanner:
         assert "--timeout" in call_args
         assert "300s" in call_args
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_command_includes_platform_when_set(self, mock_run, config, sample_trivy_results):
         """Test that scan command includes --platform flag when TRIVY_PLATFORM is set."""
         config.trivy_platform = "linux/arm64"
-        with patch('src.scanner.logger'):
+        with patch('scan.scanner.logger'):
             scanner = TrivyScanner(config, Mock())
 
         mock_result = Mock()
@@ -257,7 +257,7 @@ class TestTrivyScanner:
         platform_idx = call_args.index("--platform")
         assert call_args[platform_idx + 1] == "linux/arm64"
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_command_excludes_platform_when_empty(self, mock_run, scanner, sample_trivy_results):
         """Test that scan command does not include --platform flag when TRIVY_PLATFORM is empty."""
         mock_result = Mock()
@@ -321,7 +321,7 @@ class TestTrivyScanner:
         # Should not raise an exception
         scanner._cleanup_image_cache()
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_calls_cleanup_on_success(self, mock_run, scanner, sample_trivy_results, tmp_path):
         """Test that scan_image cleans up cache after successful scan."""
         scanner.cache_dir = tmp_path
@@ -339,7 +339,7 @@ class TestTrivyScanner:
         assert result is not None
         assert not fanal_dir.exists()
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_calls_cleanup_on_timeout(self, mock_run, scanner, tmp_path):
         """Test that scan_image cleans up cache even after timeout."""
         scanner.cache_dir = tmp_path
@@ -355,7 +355,7 @@ class TestTrivyScanner:
         assert result is None
         assert not fanal_dir.exists()
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_calls_cleanup_on_process_error(self, mock_run, scanner, tmp_path):
         """Test that scan_image cleans up cache even after process error."""
         scanner.cache_dir = tmp_path
@@ -371,7 +371,7 @@ class TestTrivyScanner:
         assert result is None
         assert not fanal_dir.exists()
 
-    @patch('src.scanner.subprocess.run')
+    @patch('scan.scanner.subprocess.run')
     def test_scan_image_calls_cleanup_on_json_error(self, mock_run, scanner, tmp_path):
         """Test that scan_image cleans up cache even after JSON decode error."""
         scanner.cache_dir = tmp_path

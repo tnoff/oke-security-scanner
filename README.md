@@ -10,7 +10,7 @@ each its own CronJob:
 
 | Feature | OKE Specific | Description |
 | ------- | ------------ | ----------- |
-| Security Scanner | No | This repo's root package/image (`src/`, `python -m src.main`). Discovers all images in the K8s cluster and scans each with Trivy. |
+| Security Scanner | No | Its own package/image (`packages/scan/`, `python -m scan`). Discovers all images in the K8s cluster and scans each with Trivy. |
 | OCIR Image Cleanup | Yes | Its own package/image (`packages/ocir_cleanup/`, `python -m ocir_cleanup`). Deletes old OCIR tags beyond a configurable `keep_count`, while protecting the deployed tag, `latest`, and any multi-arch sub-manifest digests referenced by kept tags. |
 | Orphan Manifest Cleanup | Yes | Same package/image as OCIR Image Cleanup. Detects and removes `unknown@sha256:...` platform manifests in OCIR whose digest is no longer referenced by any tagged manifest list. |
 | Cache Management | No | Security Scanner only. Automatic cleanup of Trivy image cache after each scan to minimize disk usage. |
@@ -25,8 +25,8 @@ both run with OpenTelemetry — the OTel setup/teardown helpers).
 Install and run the scanner locally:
 
 ```
-$ pip install . packages/core
-$ python -m src.main
+$ pip install packages/core packages/scan
+$ python -m scan
 ```
 
 Cleanup and secret-age-tracker are separate installs — see
@@ -40,7 +40,7 @@ See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for full local setup instructions (inc
 Or use the docker build (one per image):
 
 ```
-$ docker build .                                  # security scanner
+$ docker build -f packages/scan/Dockerfile .            # security scanner
 $ docker build -f packages/ocir_cleanup/Dockerfile .    # OCIR cleanup
 $ docker build -f packages/secret_age/Dockerfile . # secret-age tracker
 ```
@@ -110,7 +110,7 @@ Scan and cleanup are separate processes/images now, each with its own env
 vars — there's no longer a single combined `Config`. Both are provided via
 Kubernetes Secrets.
 
-**Security Scanner** (`src/main.py`, `python -m src.main`):
+**Security Scanner** (`packages/scan/src/scan/main.py`, `python -m scan`):
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|

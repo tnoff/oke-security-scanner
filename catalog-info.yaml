@@ -33,7 +33,7 @@ metadata:
   name: oke-security-scanner
   description: >-
     Discovers all images actually deployed in OKE and scans each with Trivy, reporting
-    over OpenTelemetry. Narrowed to just the scan package (src/) as of the
+    over OpenTelemetry. Narrowed to just the scan package (packages/scan/) as of the
     oke-security-scanner-package-split project -- cleanup and secret-age-tracking split
     into their own libraries below, since they're now separate installable
     packages/images, not phases of this one.

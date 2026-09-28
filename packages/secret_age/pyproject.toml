@@ -29,43 +29,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.pylint.main]
-jobs = 0
-persistent = true
-recursive = true
-
-[tool.pylint."messages control"]
-disable = [
-    "missing-module-docstring",
-    "missing-function-docstring",
-    "too-many-statements",
-    "too-few-public-methods",
-    "too-many-branches",
-    "too-many-arguments",
-    "too-many-locals",
-    "too-many-positional-arguments",
-    "too-many-instance-attributes",
-    "line-too-long",
-    "logging-fstring-interpolation",
-    "broad-exception-caught",
-    "too-many-return-statements",
-    "protected-access",
-    "too-many-nested-blocks",
-]
-
-[tool.pylint.format]
-max-line-length = 120
-indent-string = "    "
-
-[tool.pylint.basic]
-good-names = ["i", "j", "k", "ex", "Run", "_", "e", "f", "db", "ns", "cfg"]
-
-[tool.pylint.design]
-max-args = 8
-max-locals = 20
-
-[tool.pylint.similarities]
-min-similarity-lines = 10
-
-[tool.pylint.imports]
-allow-wildcard-with-all = false
+# No [tool.pylint.*] here -- tox's combined `pylint packages/core/src
+# packages/secret_age/src ...` invocation runs from the repo root, and
+# pylint discovers config from CWD, so root pyproject.toml's blocks are
+# the ones actually in effect. A duplicate copy here previously looked
+# load-bearing but wasn't; removed rather than left to drift
+# (packages/core never had one either).

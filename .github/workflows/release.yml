@@ -89,7 +89,7 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              Dockerfile|pyproject.toml|src/*|packages/core/*) IMAGE=true ;;
+              packages/core/*|packages/scan/*) IMAGE=true ;;
             esac
             case "$f" in
               packages/core/*|packages/secret_age/*) SECRET_AGE_IMAGE=true ;;
@@ -143,6 +143,7 @@ jobs:
       registry: ${{ vars.OCI_REGISTRY }}
       namespace: ${{ vars.OCI_NAMESPACE }}
       repo_name: ${{ vars.OCI_REPO_NAME }}
+      dockerfile: packages/scan/Dockerfile
     secrets:
       oci_username: ${{ secrets.OCI_USERNAME }}
       oci_token: ${{ secrets.OCI_TOKEN }}

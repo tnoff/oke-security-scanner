@@ -125,7 +125,7 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              Dockerfile|pyproject.toml|src/*|packages/core/*) IMAGE=true ;;
+              packages/core/*|packages/scan/*) IMAGE=true ;;
             esac
             case "$f" in
               packages/core/*|packages/secret_age/*) SECRET_AGE_IMAGE=true ;;
@@ -153,6 +153,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.image == 'true'
     uses: tnoff/github-workflows/.github/workflows/docker-build-check.yml@bad6dacd6d4d75b465314b1ec984efd86cc8f5e6
+    with:
+      dockerfile: packages/scan/Dockerfile
 
   build-secret-age:
     name: Build and scan secret-age image

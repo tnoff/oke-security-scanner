@@ -3,18 +3,24 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "oke-security-scanner"
+# No importable code lives here any more -- the scan package moved to
+# packages/scan/ to match core/secret_age/ocir_cleanup
+# (docs/projects/oke-security-scanner-package-split.md). This project
+# exists only so tox's default testenv has something to build+install for
+# its `dev` extra (the actual tool versions below), and to host the
+# `[tool.pylint.*]`/`[tool.bandit]`-style config tox's combined lint/scan
+# invocations read from repo-root cwd. Named `-dev` rather than
+# `oke-security-scanner` so it can't collide with packages/scan's own
+# distribution of that name in the same tox venv.
+name = "oke-security-scanner-dev"
 # Single source of truth: read from the VERSION file (CI bumps it via the
 # bump-version job in .github/workflows/ci.yml; release.yml tags from it).
+# That workflow reads/writes VERSION directly as text, never this pyproject
+# -- this dynamic-version wiring is only for a local `pip install .` at repo
+# root, which nothing does anymore, but it's left in place rather than
+# ripped out along with everything else that changed here.
 dynamic = ["version"]
 requires-python = ">=3.11"
-dependencies = [
-    "oke-scanner-core[telemetry]",
-    # dappertable is GitHub-canonical. The GitLab copy still resolves, but its
-    # tags stop at v1.1.5 while GitHub is on v1.1.6, so this pin could never be
-    # bumped past the freeze. Verified installable at 1.1.4 from this URL.
-    "dappertable @ https://github.com/tnoff/dappertable/archive/refs/tags/v1.1.7.tar.gz",
-]
 
 [project.optional-dependencies]
 dev = [
@@ -31,9 +37,8 @@ dev = [
 [tool.setuptools.dynamic]
 version = { file = "VERSION" }
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+[tool.setuptools]
+packages = []
 
 [tool.pylint.main]
 jobs = 0

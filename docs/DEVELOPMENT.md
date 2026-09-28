@@ -13,7 +13,7 @@ Scan, cleanup and secret-age-tracker are separate installable packages now
 (see `docs/AGENTS.md`'s File Structure). To work on the scanner:
 
 ```bash
-pip install -e ".[dev]" -e packages/core[telemetry]
+pip install -e ".[dev]" -e packages/core[telemetry] -e packages/scan
 ```
 
 To also work on cleanup or secret-age-tracker:
@@ -96,6 +96,6 @@ reference since both packages' Config share the OTLP/namespace shape above:
 export KUBECONFIG=~/.kube/config
 # set any other variables you need ...
 
-python -m src.main   # scanner
+python -m scan   # scanner
 python -m ocir_cleanup    # OCIR cleanup (pip install -e packages/ocir_cleanup first)
 ```

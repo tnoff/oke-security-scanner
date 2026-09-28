@@ -2,14 +2,14 @@
 
 import pytest
 from unittest.mock import Mock, patch
-from src.main import main, setup_otel, send_scan_metrics
+from scan.main import main, setup_otel, send_scan_metrics
 
 
 class TestSetupOtel:
     """Tests for setup_otel function."""
 
-    @patch('src.main.setup_telemetry')
-    @patch('src.main.create_metrics')
+    @patch('scan.main.setup_telemetry')
+    @patch('scan.main.create_metrics')
     def test_setup_otel_with_all_providers(self, mock_create_metrics, mock_setup_telemetry, base_config):
         """Test setup_otel with all providers enabled."""
         mock_meter_provider = Mock()
@@ -25,8 +25,8 @@ class TestSetupOtel:
         assert logger_provider == mock_logger_provider
         assert metrics == mock_metrics
 
-    @patch('src.main.setup_telemetry')
-    @patch('src.main.create_metrics')
+    @patch('scan.main.setup_telemetry')
+    @patch('scan.main.create_metrics')
     def test_setup_otel_with_no_providers(self, mock_create_metrics, mock_setup_telemetry, base_config):
         """Test setup_otel when all providers are disabled."""
         mock_setup_telemetry.return_value = (None, None)
@@ -42,13 +42,13 @@ class TestSetupOtel:
 class TestMain:
     """Tests for main function."""
 
-    @patch('src.main.DiscordNotifier')
-    @patch('src.main.logging')
-    @patch('src.main.Config')
-    @patch('src.main.setup_telemetry')
-    @patch('src.main.create_metrics')
-    @patch('src.main.TrivyScanner')
-    @patch('src.main.KubernetesClient')
+    @patch('scan.main.DiscordNotifier')
+    @patch('scan.main.logging')
+    @patch('scan.main.Config')
+    @patch('scan.main.setup_telemetry')
+    @patch('scan.main.create_metrics')
+    @patch('scan.main.TrivyScanner')
+    @patch('scan.main.KubernetesClient')
     def test_main_successful_run(
         self,
         mock_k8s_client,
@@ -84,13 +84,13 @@ class TestMain:
         mock_meter_provider.force_flush.assert_called_once()
         mock_logger_provider.force_flush.assert_called_once()
 
-    @patch('src.main.DiscordNotifier')
-    @patch('src.main.logging')
-    @patch('src.main.Config')
-    @patch('src.main.setup_telemetry')
-    @patch('src.main.create_metrics')
-    @patch('src.main.TrivyScanner')
-    @patch('src.main.KubernetesClient')
+    @patch('scan.main.DiscordNotifier')
+    @patch('scan.main.logging')
+    @patch('scan.main.Config')
+    @patch('scan.main.setup_telemetry')
+    @patch('scan.main.create_metrics')
+    @patch('scan.main.TrivyScanner')
+    @patch('scan.main.KubernetesClient')
     def test_main_with_discord_notification(
         self,
         mock_k8s_client,
@@ -123,13 +123,13 @@ class TestMain:
 
         mock_discord.assert_called()
 
-    @patch('src.main.DiscordNotifier')
-    @patch('src.main.logging')
-    @patch('src.main.Config')
-    @patch('src.main.setup_telemetry')
-    @patch('src.main.create_metrics')
-    @patch('src.main.TrivyScanner')
-    @patch('src.main.KubernetesClient')
+    @patch('scan.main.DiscordNotifier')
+    @patch('scan.main.logging')
+    @patch('scan.main.Config')
+    @patch('scan.main.setup_telemetry')
+    @patch('scan.main.create_metrics')
+    @patch('scan.main.TrivyScanner')
+    @patch('scan.main.KubernetesClient')
     def test_main_exception_still_flushes_telemetry(
         self,
         mock_k8s_client,
@@ -159,14 +159,14 @@ class TestMain:
         mock_meter_provider.force_flush.assert_called_once()
         mock_meter_provider.shutdown.assert_called_once()
 
-    @patch('src.main.DiscordNotifier')
-    @patch('src.main.logging')
-    @patch('src.main.Config')
-    @patch('src.main.setup_telemetry')
-    @patch('src.main.create_metrics')
-    @patch('src.main.TrivyScanner')
-    @patch('src.main.KubernetesClient')
-    @patch('src.main.send_scan_metrics')
+    @patch('scan.main.DiscordNotifier')
+    @patch('scan.main.logging')
+    @patch('scan.main.Config')
+    @patch('scan.main.setup_telemetry')
+    @patch('scan.main.create_metrics')
+    @patch('scan.main.TrivyScanner')
+    @patch('scan.main.KubernetesClient')
+    @patch('scan.main.send_scan_metrics')
     def test_main_logs_warning_when_db_update_fails_and_emits_metrics(
         self,
         mock_send_metrics,
@@ -206,7 +206,7 @@ class TestSendScanMetrics:
 
     def test_sets_critical_and_high_gauges_per_scan_result(self):
         """send_scan_metrics emits one critical + one high gauge call per scan result."""
-        from src.scanner import CompleteScanResult, ScanResult
+        from scan.scanner import CompleteScanResult, ScanResult
         from oke_scanner_core.image import Image
 
         complete = CompleteScanResult()

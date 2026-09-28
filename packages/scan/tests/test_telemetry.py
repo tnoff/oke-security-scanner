@@ -5,7 +5,7 @@ and are tested there.
 """
 
 from unittest.mock import Mock
-from src.telemetry import create_metrics, Metrics
+from scan.telemetry import create_metrics, Metrics
 
 
 class TestCreateMetrics:

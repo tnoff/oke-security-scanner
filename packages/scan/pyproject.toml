@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oke-security-scanner"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "oke-scanner-core[telemetry]",
+    # dappertable is GitHub-canonical. The GitLab copy still resolves, but its
+    # tags stop at v1.1.5 while GitHub is on v1.1.6, so this pin could never be
+    # bumped past the freeze. Verified installable at 1.1.4 from this URL.
+    "dappertable @ https://github.com/tnoff/dappertable/archive/refs/tags/v1.1.7.tar.gz",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
