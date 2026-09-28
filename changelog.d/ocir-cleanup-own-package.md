@@ -1,3 +1,0 @@
-- OCIR cleanup now ships as its own installable package (`packages/ocir_cleanup/`) with its own image, built from `packages/ocir_cleanup/Dockerfile`. No Trivy binary at all — measured 658.0 MB vs 810.8 MB for the old combined image.
-- The scan image itself also shrank, from 810.8 MB to 393.4 MB, now that `oci` (and the `build-essential` compile stage its `crc32c` transitive dep needed) left with cleanup.
-- Extracted `Image`, `KubernetesClient` and the low-level Discord webhook client into `packages/core` (`oke-scanner-core`), used by both the scan and cleanup images. Generic OTel setup/teardown moved there too, behind a new `oke-scanner-core[telemetry]` extra so `secret_age` (which has no OpenTelemetry setup at all) stays free of the SDK.
