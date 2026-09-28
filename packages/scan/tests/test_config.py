@@ -1,6 +1,6 @@
 """Tests for config module."""
 
-from src.config import Config
+from scan.config import Config
 
 
 class TestConfig:

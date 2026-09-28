@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock
-from src.config import Config
+from scan.config import Config
 
 
 @pytest.fixture

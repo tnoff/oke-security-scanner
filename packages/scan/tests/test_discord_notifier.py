@@ -12,7 +12,7 @@ class TestDiscordNotifier:
     @pytest.fixture
     def mock_dapper_table(self):
         """Mock DapperTable to avoid external dependency issues."""
-        with patch('src.discord_notifier.DapperTable') as mock:
+        with patch('scan.discord_notifier.DapperTable') as mock:
             mock_instance = MagicMock()
             mock_instance.render.return_value = ["Test message"]
             mock_instance.__len__.return_value = 1
@@ -22,13 +22,13 @@ class TestDiscordNotifier:
     @pytest.fixture
     def notifier(self, mock_dapper_table):
         """Create a DiscordNotifier instance."""
-        from src.discord_notifier import DiscordNotifier
+        from scan.discord_notifier import DiscordNotifier
         return DiscordNotifier("https://discord.com/api/webhooks/test")
 
     @patch('oke_scanner_core.discord_webhook.requests.post')
     def test_send_image_scan_report(self, mock_post, notifier, mock_dapper_table):
         """Test sending image scan report."""
-        from src.scanner import CompleteScanResult, ScanResult, CVE, CVEDetails
+        from scan.scanner import CompleteScanResult, ScanResult, CVE, CVEDetails
 
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
@@ -57,7 +57,7 @@ class TestDiscordNotifier:
     @patch('oke_scanner_core.discord_webhook.requests.post')
     def test_send_image_scan_report_shortens_dockerhub_failed_image(self, mock_post, notifier, mock_dapper_table):
         """Failed-scan rows for docker.io images use the short repo name (no 'docker.io/' prefix)."""
-        from src.scanner import CompleteScanResult
+        from scan.scanner import CompleteScanResult
 
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()
