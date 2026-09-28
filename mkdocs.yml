@@ -1,5 +1,5 @@
 site_name: 'oke-security-scanner'
-site_description: 'Scans OKE-deployed images with Trivy, prunes stale OCIR tags, and tracks secret ages -- three jobs from one image'
+site_description: 'Scans OKE-deployed images with Trivy, prunes stale OCIR tags, and tracks secret ages -- three separate packages/images sharing packages/core'
 
 nav:
   - Home: README.md

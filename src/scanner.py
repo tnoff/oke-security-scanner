@@ -11,8 +11,9 @@ from typing import Optional
 
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
+from oke_scanner_core.image import Image
+
 from .config import Config
-from .k8s_client import Image
 
 @dataclass
 class CVEDetails:

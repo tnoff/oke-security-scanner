@@ -1,6 +1,5 @@
 """Tests for config module."""
 
-import pytest
 from src.config import Config
 
 
@@ -19,9 +18,6 @@ class TestConfig:
         monkeypatch.setenv("SCAN_NAMESPACES", "default,kube-system")
         monkeypatch.setenv("EXCLUDE_NAMESPACES", "kube-node-lease")
         monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/test")
-        monkeypatch.setenv("OCIR_CLEANUP_ENABLED", "true")
-        monkeypatch.setenv("OCIR_CLEANUP_KEEP_COUNT", "10")
-        monkeypatch.setenv("OCIR_EXTRA_REPOSITORIES", "repo1,repo2")
 
         config = Config.from_env()
 
@@ -35,9 +31,6 @@ class TestConfig:
         assert config.namespaces == ["default", "kube-system"]
         assert config.exclude_namespaces == ["kube-node-lease"]
         assert config.discord_webhook_url == "https://discord.com/api/webhooks/test"
-        assert config.ocir_cleanup_enabled is True
-        assert config.ocir_cleanup_keep_count == 10
-        assert config.ocir_extra_repositories == ["repo1", "repo2"]
 
     def test_from_env_with_defaults(self):
         """Test Config.from_env with default values."""
@@ -54,10 +47,6 @@ class TestConfig:
         assert config.namespaces == []
         assert config.exclude_namespaces == ["kube-system", "kube-public", "kube-node-lease"]
         assert config.discord_webhook_url == ""
-        assert config.ocir_cleanup_enabled is False
-        assert config.ocir_cleanup_keep_count == 5
-        # Unset env var must yield empty list (not [""])
-        assert config.ocir_extra_repositories == []
 
     def test_from_env_otlp_insecure_false(self, monkeypatch):
         """Test OTLP_INSECURE=false."""
@@ -70,25 +59,6 @@ class TestConfig:
         """Test that Discord webhook URL is empty by default."""
         config = Config.from_env()
         assert config.discord_webhook_url == ""
-        assert config.discord_cleanup_webhook_url == ""
-
-    def test_discord_cleanup_webhook_url_falls_back_to_scan_url(self, monkeypatch):
-        """DISCORD_CLEANUP_WEBHOOK_URL unset → cleanup uses the scan URL.
-
-        Backward-compat for deploys that haven't wired the split yet.
-        """
-        monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/scan")
-        config = Config.from_env()
-        assert config.discord_webhook_url == "https://discord.com/api/webhooks/scan"
-        assert config.discord_cleanup_webhook_url == "https://discord.com/api/webhooks/scan"
-
-    def test_discord_cleanup_webhook_url_overrides_scan_url(self, monkeypatch):
-        """DISCORD_CLEANUP_WEBHOOK_URL set → cleanup uses it independently of the scan URL."""
-        monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/scan")
-        monkeypatch.setenv("DISCORD_CLEANUP_WEBHOOK_URL", "https://discord.com/api/webhooks/cleanup")
-        config = Config.from_env()
-        assert config.discord_webhook_url == "https://discord.com/api/webhooks/scan"
-        assert config.discord_cleanup_webhook_url == "https://discord.com/api/webhooks/cleanup"
 
     def test_otlp_metrics_enabled(self, monkeypatch):
         """Test OTLP_METRICS_ENABLED=true."""
@@ -104,20 +74,6 @@ class TestConfig:
         config = Config.from_env()
         assert config.otlp_logs_enabled is True
 
-    def test_ocir_cleanup_enabled(self, monkeypatch):
-        """Test OCIR_CLEANUP_ENABLED=true."""
-        monkeypatch.setenv("OCIR_CLEANUP_ENABLED", "true")
-
-        config = Config.from_env()
-        assert config.ocir_cleanup_enabled is True
-
-    def test_ocir_cleanup_keep_count(self, monkeypatch):
-        """Test OCIR_CLEANUP_KEEP_COUNT setting."""
-        monkeypatch.setenv("OCIR_CLEANUP_KEEP_COUNT", "10")
-
-        config = Config.from_env()
-        assert config.ocir_cleanup_keep_count == 10
-
     def test_trivy_platform(self, monkeypatch):
         """Test TRIVY_PLATFORM setting."""
         monkeypatch.setenv("TRIVY_PLATFORM", "linux/arm64")
@@ -129,78 +85,3 @@ class TestConfig:
         """Test TRIVY_PLATFORM defaults to empty string."""
         config = Config.from_env()
         assert config.trivy_platform == ""
-
-    def test_phase_toggles_default_on(self):
-        """ENABLE_SCAN and ENABLE_CLEANUP default to True; CLEANUP_REPO to empty."""
-        config = Config.from_env()
-        assert config.enable_scan is True
-        assert config.enable_cleanup is True
-        assert config.cleanup_repo == ""
-
-    def test_enable_scan_off(self, monkeypatch):
-        """ENABLE_SCAN=false with cleanup still enabled is valid (on-push Job shape)."""
-        monkeypatch.setenv("ENABLE_SCAN", "false")
-        monkeypatch.setenv("CLEANUP_REPO", "tnoff/discord_bot")
-
-        config = Config.from_env()
-        assert config.enable_scan is False
-        assert config.enable_cleanup is True
-        assert config.cleanup_repo == "tnoff/discord_bot"
-
-    def test_enable_cleanup_off(self, monkeypatch):
-        """ENABLE_CLEANUP=false with scan still enabled is valid (scan-only run)."""
-        monkeypatch.setenv("ENABLE_CLEANUP", "false")
-
-        config = Config.from_env()
-        assert config.enable_scan is True
-        assert config.enable_cleanup is False
-
-    def test_both_disabled_raises(self, monkeypatch):
-        """Disabling both phases is a misconfiguration — fail fast."""
-        monkeypatch.setenv("ENABLE_SCAN", "false")
-        monkeypatch.setenv("ENABLE_CLEANUP", "false")
-
-        with pytest.raises(ValueError, match="ENABLE_SCAN"):
-            Config.from_env()
-
-    def test_cleanup_repo_without_cleanup_phase_raises(self, monkeypatch):
-        """CLEANUP_REPO set while ENABLE_CLEANUP=false is a misconfiguration."""
-        monkeypatch.setenv("ENABLE_CLEANUP", "false")
-        monkeypatch.setenv("CLEANUP_REPO", "tnoff/discord_bot")
-
-        with pytest.raises(ValueError, match="CLEANUP_REPO"):
-            Config.from_env()
-
-    def test_cleanup_protect_tags_regex_invalid_raises(self, monkeypatch):
-        """Invalid CLEANUP_PROTECT_TAGS_REGEX is rejected at load time."""
-        monkeypatch.setenv("CLEANUP_PROTECT_TAGS_REGEX", "[unclosed")
-
-        with pytest.raises(ValueError, match="CLEANUP_PROTECT_TAGS_REGEX"):
-            Config.from_env()
-
-    def test_cleanup_group_by_regex_invalid_raises(self, monkeypatch):
-        """Invalid CLEANUP_GROUP_BY_REGEX is rejected at load time."""
-        monkeypatch.setenv("CLEANUP_GROUP_BY_REGEX", "(unclosed")
-
-        with pytest.raises(ValueError, match="CLEANUP_GROUP_BY_REGEX"):
-            Config.from_env()
-
-    def test_cleanup_group_by_regex_without_capture_group_raises(self, monkeypatch):
-        """CLEANUP_GROUP_BY_REGEX without a capture group is rejected.
-
-        The first capture group is the group key, so a regex with no
-        groups can't drive per-group keep_count.
-        """
-        monkeypatch.setenv("CLEANUP_GROUP_BY_REGEX", r"\d+\.\d+")
-
-        with pytest.raises(ValueError, match="capture group"):
-            Config.from_env()
-
-    def test_cleanup_regex_valid(self, monkeypatch):
-        """Valid protect + group regexes load without error."""
-        monkeypatch.setenv("CLEANUP_PROTECT_TAGS_REGEX", r"^\d+\.\d+$")
-        monkeypatch.setenv("CLEANUP_GROUP_BY_REGEX", r"^(\d+\.\d+)")
-
-        config = Config.from_env()
-        assert config.cleanup_protect_tags_regex == r"^\d+\.\d+$"
-        assert config.cleanup_group_by_regex == r"^(\d+\.\d+)"

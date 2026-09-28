@@ -1,4 +1,4 @@
-"""Main entry point for OKE Security Scanner."""
+"""Main entry point for the vulnerability scan."""
 
 import sys
 import logging
@@ -8,13 +8,13 @@ from typing import Tuple, Optional
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
+from oke_scanner_core.image import Image
+from oke_scanner_core.k8s_client import KubernetesClient
 
 from .config import Config
-from .telemetry import setup_telemetry, create_metrics, Metrics
-from .k8s_client import KubernetesClient, Image
+from .telemetry import setup_telemetry, shutdown_telemetry, create_metrics, Metrics
 from .scanner import TrivyScanner, CompleteScanResult
 from .discord_notifier import DiscordNotifier
-from .registry_client import RegistryClient
 
 
 logger = getLogger(__name__)
@@ -49,18 +49,14 @@ def run_scan(
     scanner_metrics: Optional[Metrics],
     notifier: Optional[DiscordNotifier],
 ) -> set[Image]:
-    """Run the Trivy scan phase and return the discovered image set.
-
-    The returned set is reused by the cleanup phase (so we don't list
-    pods twice when both phases run in the same Job).
-    """
+    """Run the Trivy scan phase and return the discovered image set."""
     scanner = TrivyScanner(config, logger_provider)
     logger.info("Updating Trivy vulnerability database...")
     if not scanner.update_database():
         logger.warning("Trivy database update failed, using cached database")
 
     logger.debug("Initializing Kubernetes client")
-    k8s_client = KubernetesClient(config, logger_provider)
+    k8s_client = KubernetesClient(config.namespaces, config.exclude_namespaces, logger_provider)
 
     logger.info("Discovering deployed container images...")
     images = k8s_client.get_all_images()
@@ -82,74 +78,6 @@ def run_scan(
 
     return images
 
-def run_cleanup(
-    config: Config,
-    logger_provider: Optional[LoggerProvider],
-    notifier: Optional[DiscordNotifier],
-    discovered_images: Optional[set[Image]] = None,
-):
-    """Run the OCIR tag + orphan-manifest cleanup phase.
-
-    If ``CLEANUP_REPO`` is set, the cleanup is scoped to that single
-    OCIR repo (used by producer pipelines that fire a one-off Job after
-    pushing). Otherwise it sweeps every deployed image. ``discovered_images``
-    is passed by ``run_scan`` to avoid re-listing pods.
-    """
-    if discovered_images is None:
-        k8s_client = KubernetesClient(config, logger_provider)
-        discovered_images = k8s_client.get_all_images()
-
-    if config.cleanup_repo:
-        logger.info(f"Cleanup scoped to repo: {config.cleanup_repo}")
-        images = {
-            im for im in discovered_images
-            if im.is_ocir_image and im.repo_name == config.cleanup_repo
-        }
-        # Always include the target repo in extras so cleanup runs even if
-        # nothing is currently deployed (e.g. first push of a new repo).
-        extras = [config.cleanup_repo]
-    else:
-        images = discovered_images
-        extras = config.ocir_extra_repositories
-
-    registry_client = RegistryClient(config)
-
-    logger.info("Checking for OCIR cleanup recommendations...")
-    cleanup_recommendations = registry_client.get_old_ocir_images(
-        images, keep_count=config.ocir_cleanup_keep_count,
-        extra_repositories=extras,
-    )
-    # The scan augments `images` in place with the configured extras; union the
-    # extras explicitly too so the per-repo "nothing deleted" report stays
-    # complete regardless of that in-place augmentation.
-    scanned_repos = {f'{im.registry}/{im.repo_name}' for im in images if im.is_ocir_image}
-    scanned_repos.update(f'{registry_client.oci_registry}/{extra}' for extra in extras)
-    scanned_repos = sorted(scanned_repos)
-
-    if config.ocir_cleanup_enabled:
-        deletion_results = registry_client.delete_ocir_images(cleanup_recommendations)
-        if notifier:
-            logger.debug("Sending Discord webhook notification...")
-            notifier.send_deletion_results(deletion_results, scanned_repos)
-    elif notifier:
-        logger.debug("Sending Discord webhook notification...")
-        notifier.send_cleanup_recommendations(cleanup_recommendations)
-
-    logger.info("Checking for orphaned platform manifests...")
-    orphan_recommendations = registry_client.get_orphaned_manifests(
-        images, extra_repositories=extras,
-    )
-    for rec in orphan_recommendations:
-        logger.info(f"Found {len(rec.tags_to_delete)} orphaned manifests in {rec.repository}")
-
-    if config.ocir_cleanup_enabled:
-        orphans_deleted = registry_client.delete_ocir_images(orphan_recommendations)
-        if orphans_deleted:
-            logger.info(f"Deleted {len(orphans_deleted)} orphaned platform manifests")
-        if notifier:
-            logger.debug("Sending Discord webhook notification...")
-            notifier.send_deletion_results(orphans_deleted, scanned_repos, is_orphaned=True)
-
 def main():
     """Run the security scanner."""
     # Configure logging to DEBUG level and output to stdout
@@ -166,50 +94,19 @@ def main():
     meter_provider = None
     logger_provider = None
 
-    try:
-        # Load configuration
-        logger.debug("Loading configuration from environment variables")
-        config = Config.from_env()
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        sys.exit(1)
+    logger.debug("Loading configuration from environment variables")
+    config = Config.from_env()
 
     try:
         meter_provider, logger_provider, scanner_metrics = setup_otel(config)
-        scan_notifier = DiscordNotifier(config.discord_webhook_url) if config.discord_webhook_url else None
-        cleanup_notifier = DiscordNotifier(config.discord_cleanup_webhook_url) if config.discord_cleanup_webhook_url else None
+        notifier = DiscordNotifier(config.discord_webhook_url) if config.discord_webhook_url else None
 
-        discovered_images = None
-        if config.enable_scan:
-            discovered_images = run_scan(config, logger_provider, scanner_metrics, scan_notifier)
-        else:
-            logger.info("ENABLE_SCAN=false — skipping Trivy scan phase")
-
-        if config.enable_cleanup:
-            run_cleanup(config, logger_provider, cleanup_notifier, discovered_images)
-        else:
-            logger.info("ENABLE_CLEANUP=false — skipping OCIR cleanup phase")
+        run_scan(config, logger_provider, scanner_metrics, notifier)
 
         logger.info("Run completed successfully")
 
     finally:
-        # Properly shutdown telemetry to flush all pending data
-        logger.info("Shutting down telemetry...")
-
-        # Use providers from setup_telemetry (will be None if disabled)
-        if meter_provider:
-            logger.debug("Flushing metrics...")
-            meter_provider.force_flush(timeout_millis=30000)
-            meter_provider.shutdown()
-            logger.debug("Metrics flushed")
-
-        if logger_provider:
-            logger.debug("Flushing logs...")
-            logger_provider.force_flush(timeout_millis=30000)
-            logger_provider.shutdown()
-            logger.debug("Logs flushed")
-
-        logger.info("Telemetry shutdown complete")
+        shutdown_telemetry(meter_provider, logger_provider, logger)
 
 
 if __name__ == "__main__":  # pragma: no cover

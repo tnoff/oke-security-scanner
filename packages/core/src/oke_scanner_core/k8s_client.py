@@ -1,76 +1,40 @@
 """Kubernetes client for discovering deployed images."""
 
-from datetime import datetime
-from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Self
+from typing import Optional
 
-from kubernetes import client, config
+from kubernetes import client
 from kubernetes.client.rest import ApiException
-from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
-from .config import Config
+from .image import Image
+from .k8s_auth import load_k8s_config
 
 logger = getLogger(__name__)
 
-@dataclass(unsafe_hash=True)
-class Image:
-    '''Base image'''
-    full_name: str
-    # Ocid if ocir image
-    ocid: str = None
-    created_at: datetime = None
-    digest: str = None
-    repo_name: str = field(init=False)
-    tag: str = field(init=False)
-    registry: str = field(init=False)
-
-    def __post_init__(self):
-        # Init the rest
-        parsed = self.full_name.split(':')
-        # Strip digest (@sha256:...) from the tag if present
-        self.tag = parsed[1].split('@')[0]
-        self.repo_name = parsed[0]
-        if self.full_name.count('/') < 2:
-            self.registry = "docker.io"
-        else:
-            repo_parsed = parsed[0].split('/')
-            self.repo_name = '/'.join(i for i in repo_parsed[1:])
-            self.registry = repo_parsed[0]
-
-    def __eq__(self, value: Self) -> bool:
-        return self.full_name == value.full_name
-
-    def __lt__(self, value: Self) -> bool:
-        if self.created_at and value.created_at:
-            return self.created_at < value.created_at
-        return self.full_name < value.full_name
-
-    def __str__(self):
-        return self.full_name
-
-    @property
-    def is_ocir_image(self) -> bool:
-        '''Check if ocir registry'''
-        return 'ocir' in self.registry
 
 class KubernetesClient:
-    """Client for interacting with Kubernetes API."""
+    """Client for discovering container images deployed in the cluster."""
 
-    def __init__(self, cfg: Config, logger_provider):
-        """Initialize Kubernetes client."""
-        self.cfg = cfg
+    def __init__(self, namespaces: list[str], exclude_namespaces: list[str],
+                 logger_provider: Optional[object] = None):
+        """Initialize Kubernetes client.
+
+        Args:
+            namespaces: Namespaces to scan. Empty means "all namespaces
+                minus exclude_namespaces".
+            exclude_namespaces: Namespaces to skip when namespaces is empty.
+            logger_provider: Optional OTel LoggerProvider. Deferred import so
+                packages that never pass one (e.g. secret_age, which uses
+                only oke_scanner_core.k8s_auth directly, not this class) do
+                not need opentelemetry-instrumentation-logging installed.
+        """
+        self.namespaces = namespaces
+        self.exclude_namespaces = exclude_namespaces
         if logger_provider:
+            from opentelemetry.instrumentation.logging.handler import LoggingHandler  # pylint: disable=import-outside-toplevel
             logger.addHandler(LoggingHandler(level=10, logger_provider=logger_provider))
 
-        try:
-            # Load in-cluster config (when running in K8s)
-            config.load_incluster_config()
-            logger.info("Loaded in-cluster Kubernetes configuration")
-        except config.ConfigException:
-            # Fallback to kubeconfig (for local development)
-            config.load_kube_config()
-            logger.info("Loaded kubeconfig from local environment")
+        load_k8s_config()
 
         # kubernetes==36.0.0 regression: load_*_config() stores the bearer
         # token under api_key['authorization'], but the generated API methods
@@ -109,15 +73,15 @@ class KubernetesClient:
     def _get_namespaces(self) -> list[str]:
         """Get list of namespaces to scan."""
         # If specific namespaces configured, use those
-        if self.cfg.namespaces:
-            return self.cfg.namespaces
+        if self.namespaces:
+            return self.namespaces
 
         # Otherwise, get all namespaces and filter exclusions
         all_namespaces = self.core_v1.list_namespace()
         namespaces = [
             ns.metadata.name
             for ns in all_namespaces.items
-            if ns.metadata.name not in self.cfg.exclude_namespaces
+            if ns.metadata.name not in self.exclude_namespaces
         ]
         return namespaces
 

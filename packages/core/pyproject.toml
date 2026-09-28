@@ -4,10 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oke-scanner-core"
-version = "0.1.0"
+version = "0.3.0"
 requires-python = ">=3.11"
 dependencies = [
     "kubernetes==36.0.3",
+    "requests",
+]
+
+[project.optional-dependencies]
+# oke_scanner_core.telemetry -- kept out of the base dependency set so
+# secret_age (bare `oke-scanner-core`, no OpenTelemetry setup at all)
+# doesn't pull in the SDK/exporters it never uses.
+telemetry = [
+    "opentelemetry-api",
+    "opentelemetry-sdk==1.44.0",
+    "opentelemetry-exporter-otlp",
+    "opentelemetry-instrumentation",
+    "opentelemetry-instrumentation-logging",
 ]
 
 [tool.setuptools.packages.find]

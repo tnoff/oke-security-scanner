@@ -1,14 +1,14 @@
 ---
 # RBAC for the GitLab runner to spawn one-off cleanup Jobs from the
-# security-scanner CronJob template.
+# cleanup CronJob template (packages/cleanup -- its own image/CronJob as
+# of the package split, no longer a phase of the security-scanner one).
 #
 # A producer repo's pipeline (e.g. docker-apps) fires this immediately
 # after a new image is pushed by running:
 #
 #   kubectl -n <SCANNER_NS> create job cleanup-<repo>-<sha> \
-#     --from=cronjob/security-scanner --dry-run=client -o json \
+#     --from=cronjob/cleanup-all --dry-run=client -o json \
 #   | jq '.spec.template.spec.containers[0].env += [
-#         {"name":"ENABLE_SCAN","value":"false"},
 #         {"name":"CLEANUP_REPO","value":"<ocir-repo>"},
 #         {"name":"OCIR_CLEANUP_ENABLED","value":"true"}
 #       ]' \
@@ -29,7 +29,7 @@ metadata:
 rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
-    resourceNames: ["security-scanner"]
+    resourceNames: ["cleanup-all"]
     verbs: ["get"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
