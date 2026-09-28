@@ -15,13 +15,15 @@
 # dependsOn its own library here, not all three on this one -- that edge
 # lives in docker-apps' descriptor, updated separately.
 #
-# secret-age-tracker's library is named secret-age-tracker-package, not
-# secret-age-tracker: Backstage entity identity is (kind, namespace, name),
-# spec.type isn't part of it, and docker-apps already has a `Component`
-# named secret-age-tracker (its service/CronJob entity) -- same name would
-# collide. oke-security-scanner and ocir-cleanup don't have this problem:
-# neither collides with its own CronJob's Component name (security-scanner,
-# cleanup-all), so neither needed a suffix.
+# This library is named secret-age-tracker, matching the package -- the naming
+# collision that would create (docker-apps' catalog-info.yaml already has a
+# service Component of that name for the CronJob; Backstage entity identity is
+# (kind, namespace, name), spec.type isn't part of it) is resolved on the
+# docker-apps side instead: that Component is renamed to
+# secret-age-tracker-cronjob there, following the same
+# name-doesn't-match-the-k8s-resource shape already documented for the
+# magic-mirror Components (backstage.io/kubernetes-id, not literal name
+# equality, is the intended fix once the Kubernetes plugin is wired up).
 #
 # techdocs-ref stays on oke-security-scanner only -- one canonical entity
 # per repo should own a given TechDocs site, not all four.
@@ -75,7 +77,7 @@ spec:
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
-  name: secret-age-tracker-package
+  name: secret-age-tracker
   description: >-
     Reports secrets ≥90 days old across OCI IAM credentials, Kubernetes Secrets, and
     operator-tracked admin tfvars (via a layer-1 ledger ConfigMap). Its own package
@@ -99,7 +101,7 @@ metadata:
     platform manifests, protecting the deployed tag, latest, and any multi-arch
     sub-manifest digests referenced by kept tags. Its own package
     (packages/ocir_cleanup/) and its own image; no Trivy binary, but does use the
-    OpenTelemetry SDK (unlike secret-age-tracker-package -- the cleanup-all CronJob
+    OpenTelemetry SDK (unlike secret-age-tracker -- the cleanup-all CronJob
     genuinely enables OTLP metrics + logs).
 spec:
   type: library
