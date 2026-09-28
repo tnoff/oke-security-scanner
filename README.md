@@ -1,12 +1,14 @@
-# OKE Security Scanner
+# OKE Utilities
 
-Automated vulnerability scanning for Docker images deployed in Oracle Kubernetes Engine (OKE) with OpenTelemetry observability.
+Three independent CronJob packages/images for the OKE cluster: image
+vulnerability scanning (with OpenTelemetry observability), OCIR tag/manifest
+cleanup, and secret-age tracking. Originally a single "security scanner"
+repo; renamed once the
+[package split](https://github.com/tnoff/docs) (`docs/projects/oke-security-scanner-package-split.md`)
+made clear it was really three independent utilities sharing one repo and
+one `packages/core`, not phases of one scanner.
 
 ## Features
-
-Three independent packages/images as of the
-[package split](https://github.com/tnoff/docs) (`docs/projects/oke-security-scanner-package-split.md`),
-each its own CronJob:
 
 | Feature | OKE Specific | Description |
 | ------- | ------------ | ----------- |

@@ -20,7 +20,7 @@ spec:
           restartPolicy: OnFailure
           containers:
           - name: scanner
-            image: iad.ocir.io/your-namespace/oke-security-scanner:latest
+            image: iad.ocir.io/your-namespace/oke-scan:latest
             imagePullPolicy: Always
             resources:
               requests:
