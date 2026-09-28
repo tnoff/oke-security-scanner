@@ -142,7 +142,7 @@ jobs:
     with:
       registry: ${{ vars.OCI_REGISTRY }}
       namespace: ${{ vars.OCI_NAMESPACE }}
-      repo_name: ${{ vars.OCI_REPO_NAME }}
+      repo_name: oke-scan
       dockerfile: packages/scan/Dockerfile
     secrets:
       oci_username: ${{ secrets.OCI_USERNAME }}
@@ -154,7 +154,7 @@ jobs:
     uses: tnoff/github-workflows/.github/workflows/trigger-bump-dispatch.yml@bad6dacd6d4d75b465314b1ec984efd86cc8f5e6
     # Rewrites the pin in docker-apps apps/security-scanner/cronjob.yaml.
     with:
-      bump_source: oke-security-scanner
+      bump_source: oke-scan
       image: ${{ needs.push-image.outputs.image }}
       image_tag: ${{ needs.push-image.outputs.secondary_tag }}
     secrets:

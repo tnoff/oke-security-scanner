@@ -10,9 +10,9 @@ build-backend = "setuptools.build_meta"
 # its `dev` extra (the actual tool versions below), and to host the
 # `[tool.pylint.*]`/`[tool.bandit]`-style config tox's combined lint/scan
 # invocations read from repo-root cwd. Named `-dev` rather than
-# `oke-security-scanner` so it can't collide with packages/scan's own
-# distribution of that name in the same tox venv.
-name = "oke-security-scanner-dev"
+# `oke-utilities` (the repo) or `oke-scan` (packages/scan's own pip name)
+# so it can't collide with either in the same tox venv.
+name = "oke-utilities-dev"
 # Single source of truth: read from the VERSION file (CI bumps it via the
 # bump-version job in .github/workflows/ci.yml; release.yml tags from it).
 # That workflow reads/writes VERSION directly as text, never this pyproject

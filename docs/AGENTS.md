@@ -1,4 +1,4 @@
-# AI Agent Context for OKE Security Scanner
+# AI Agent Context for OKE Utilities
 
 Context for AI agents (Claude, GPT, etc.) working on this codebase.
 
@@ -7,7 +7,7 @@ For **what the project does**, **how to install/run it**, **env-var reference**,
 ## File Structure
 
 ```
-oke-security-scanner/
+oke-utilities/
 ├── packages/             # Four separate installable packages/images -- see
 │   │                     # docs/projects/oke-security-scanner-package-split.md.
 │   │                     # None carries its own dev-tool versions or pylint
@@ -22,7 +22,7 @@ oke-security-scanner/
 │   │                               # `oke-scanner-core[telemetry]` extra -- secret_age
 │   │                               # depends on bare oke-scanner-core and never installs
 │   │                               # the OTel SDK; scan and cleanup both request the extra.
-│   ├── scan/             # oke-security-scanner: own package, own Dockerfile, own
+│   ├── scan/             # oke-scan: own package, own Dockerfile, own
 │   │   │                 # CronJob + entry point (`python -m scan`). Discovers all
 │   │   │                 # images deployed in OKE and scans each with Trivy.
 │   │   ├── Dockerfile
@@ -206,7 +206,7 @@ Measured (not read off the Dockerfile), at the time of the original scan/cleanup
 The project uses **GitHub Actions**. `.github/workflows/` holds three callers:
 
 - `ci.yml` — on pull requests: trufflehog secret scan, the tox matrix (pytest + pylint + bandit across Python 3.11–3.14) with a diff-cover gate, a conditional image build + image scan for EACH image (`changes` job outputs `image`/`secret_age_image`/`ocir_cleanup_image`, gated on separate path filters -- not a matrix, so each has its own `needs`/`if`; `packages/core/*` flips all three, since all three depend on it), `bump-version`, and `check-workflow-contracts` (catches a `uses:` whose inputs/secrets no longer match the pinned callee). The scan build/scan job passes `dockerfile: packages/scan/Dockerfile` explicitly now (the reusable `docker-build-check.yml`'s default is root `Dockerfile`, which no longer exists).
-- `release.yml` — on `main`: fold the changelog, tag from `VERSION` (shared across all three images), push each changed image to OCIR under its own OCIR repo name, and trigger a `docker-apps` pin bump per image (`oke-security-scanner`, `secret-age-tracker` and `cleanup-all` are separate `bump_source`s, each its own explicit `push-image-*`/`trigger-bump-*` job pair -- not a matrix; matrix job outputs aren't addressable per-leg, and `trigger-bump` needs the exact tag its own paired push produced). Same `dockerfile: packages/scan/Dockerfile` override on the scan `push-image` job as `ci.yml`.
+- `release.yml` — on `main`: fold the changelog, tag from `VERSION` (shared across all three images), push each changed image to OCIR under its own OCIR repo name, and trigger a `docker-apps` pin bump per image (`oke-scan`, `secret-age-tracker` and `ocir-cleanup` are separate `bump_source`s, each its own explicit `push-image-*`/`trigger-bump-*` job pair -- not a matrix; matrix job outputs aren't addressable per-leg, and `trigger-bump` needs the exact tag its own paired push produced). Same `dockerfile: packages/scan/Dockerfile` override on the scan `push-image` job as `ci.yml`. Scan's `repo_name` is now hardcoded `oke-scan` directly in the job (matching secret-age-tracker/ocir-cleanup's own jobs) rather than sourced from a terraform-set `vars.OCI_REPO_NAME` -- that variable only ever pointed at one of the three images and was dropped once there was no single "the" image left to name it after.
 - `scheduled.yml` — weekly: Renovate and branch cleanup.
 
 Each job calls a reusable workflow from `tnoff/github-workflows`, SHA-pinned in `uses:` and kept current by Renovate's github-actions manager. There is no `.gitlab-ci.yml` in this repo -- `ci.yml`'s own header notes it was ported from one, but the file itself isn't present, frozen or otherwise.

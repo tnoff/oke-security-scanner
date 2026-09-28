@@ -25,12 +25,20 @@
 # magic-mirror Components (backstage.io/kubernetes-id, not literal name
 # equality, is the intended fix once the Kubernetes plugin is wired up).
 #
-# techdocs-ref stays on oke-security-scanner only -- one canonical entity
-# per repo should own a given TechDocs site, not all four.
+# techdocs-ref stays on oke-scan only -- one canonical entity per repo
+# should own a given TechDocs site, not all four.
+#
+# This library was renamed from oke-security-scanner to oke-scan, and the
+# repo itself from oke-security-scanner to oke-utilities, once it was clear
+# "oke-security-scanner" was doing double duty as both the repo name and
+# one specific package's name -- the repo now holds three sibling
+# CronJob packages, and the scanner is no longer special among them.
+# github.com/project-slug re-derives from the renamed repo's URL
+# automatically; nothing else here needed touching for that half.
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
-  name: oke-security-scanner
+  name: oke-scan
   description: >-
     Discovers all images actually deployed in OKE and scans each with Trivy, reporting
     over OpenTelemetry. Narrowed to just the scan package (packages/scan/) as of the
