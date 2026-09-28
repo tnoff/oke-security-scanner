@@ -99,7 +99,7 @@ jobs:
     outputs:
       image: ${{ steps.filter.outputs.image }}
       secret_age_image: ${{ steps.filter.outputs.secret_age_image }}
-      cleanup_image: ${{ steps.filter.outputs.cleanup_image }}
+      ocir_cleanup_image: ${{ steps.filter.outputs.ocir_cleanup_image }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -121,7 +121,7 @@ jobs:
           FILES="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
           IMAGE=false
           SECRET_AGE_IMAGE=false
-          CLEANUP_IMAGE=false
+          OCIR_CLEANUP_IMAGE=false
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
@@ -131,15 +131,15 @@ jobs:
               packages/core/*|packages/secret_age/*) SECRET_AGE_IMAGE=true ;;
             esac
             case "$f" in
-              packages/core/*|packages/cleanup/*) CLEANUP_IMAGE=true ;;
+              packages/core/*|packages/ocir_cleanup/*) OCIR_CLEANUP_IMAGE=true ;;
             esac
           done <<< "${FILES}"
           echo "image inputs changed: ${IMAGE}"
           echo "secret-age image inputs changed: ${SECRET_AGE_IMAGE}"
-          echo "cleanup image inputs changed: ${CLEANUP_IMAGE}"
+          echo "ocir-cleanup image inputs changed: ${OCIR_CLEANUP_IMAGE}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
           echo "secret_age_image=${SECRET_AGE_IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "cleanup_image=${CLEANUP_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "ocir_cleanup_image=${OCIR_CLEANUP_IMAGE}" >> "$GITHUB_OUTPUT"
 
   # GitLab ran the build and the image scan as two jobs, shipping the image
   # between them as a tarball through an object-storage bucket.
@@ -162,13 +162,13 @@ jobs:
     with:
       dockerfile: packages/secret_age/Dockerfile
 
-  build-cleanup:
-    name: Build and scan cleanup image
+  build-ocir-cleanup:
+    name: Build and scan ocir-cleanup image
     needs: changes
-    if: needs.changes.outputs.cleanup_image == 'true'
+    if: needs.changes.outputs.ocir_cleanup_image == 'true'
     uses: tnoff/github-workflows/.github/workflows/docker-build-check.yml@bad6dacd6d4d75b465314b1ec984efd86cc8f5e6
     with:
-      dockerfile: packages/cleanup/Dockerfile
+      dockerfile: packages/ocir_cleanup/Dockerfile
 
   bump-version:
     name: Bump version
@@ -217,7 +217,7 @@ jobs:
     # This job always runs and its name never changes, so the ruleset requires
     # exactly one context and the jobs underneath stay free to change.
     if: always()
-    needs: [secrets, tox, changes, build, build-secret-age, build-cleanup, contracts, metadata]
+    needs: [secrets, tox, changes, build, build-secret-age, build-ocir-cleanup, contracts, metadata]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -230,7 +230,7 @@ jobs:
           echo "changes:            ${{ needs.changes.result }}"
           echo "build:              ${{ needs.build.result }}"
           echo "build-secret-age:   ${{ needs['build-secret-age'].result }}"
-          echo "build-cleanup:      ${{ needs['build-cleanup'].result }}"
+          echo "build-ocir-cleanup: ${{ needs['build-ocir-cleanup'].result }}"
           echo "contracts:          ${{ needs.contracts.result }}"
 
       - name: Fail if any job failed
@@ -242,7 +242,7 @@ jobs:
           needs.changes.result == 'failure' || needs.changes.result == 'cancelled' ||
           needs.build.result == 'failure' || needs.build.result == 'cancelled' ||
           needs['build-secret-age'].result == 'failure' || needs['build-secret-age'].result == 'cancelled' ||
-          needs['build-cleanup'].result == 'failure' || needs['build-cleanup'].result == 'cancelled' ||
+          needs['build-ocir-cleanup'].result == 'failure' || needs['build-ocir-cleanup'].result == 'cancelled' ||
           needs.contracts.result == 'failure' || needs.contracts.result == 'cancelled' ||
           needs.metadata.result == 'failure' || needs.metadata.result == 'cancelled'
         run: |

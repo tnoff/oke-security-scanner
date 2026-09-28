@@ -19,7 +19,7 @@ pip install -e ".[dev]" -e packages/core[telemetry]
 To also work on cleanup or secret-age-tracker:
 
 ```bash
-pip install -e packages/cleanup -e packages/secret_age
+pip install -e packages/ocir_cleanup -e packages/secret_age
 ```
 
 ## Running tests
@@ -42,7 +42,7 @@ tox -e bandit    # security scan only
 
 Scan and cleanup are separate processes now, each with its own env vars --
 no shared `Config`. The tables below are the scanner's; see
-`packages/cleanup/src/cleanup/config.py` for cleanup's own (same OTLP/
+`packages/ocir_cleanup/src/ocir_cleanup/config.py` for cleanup's own (same OTLP/
 namespace shape, plus the OCIR cleanup knobs, minus Trivy). All variables
 are optional and fall back to the defaults shown below.
 
@@ -78,7 +78,7 @@ are optional and fall back to the defaults shown below.
 
 ### OCIR cleanup
 
-Cleanup-only (`packages/cleanup`, not the scanner) — listed here for
+Cleanup-only (`packages/ocir_cleanup`, not the scanner) — listed here for
 reference since both packages' Config share the OTLP/namespace shape above:
 
 | Variable | Default | Description |
@@ -97,5 +97,5 @@ export KUBECONFIG=~/.kube/config
 # set any other variables you need ...
 
 python -m src.main   # scanner
-python -m cleanup    # OCIR cleanup (pip install -e packages/cleanup first)
+python -m ocir_cleanup    # OCIR cleanup (pip install -e packages/ocir_cleanup first)
 ```

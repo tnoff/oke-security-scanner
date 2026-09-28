@@ -16,7 +16,7 @@ metadata:
     and tracks secret ages, reporting over OpenTelemetry (secret-age-tracker excepted --
     plain stdout logging, no OTLP). Three installable packages as of the
     oke-security-scanner-package-split project: the scan image (src/), cleanup's own
-    (packages/cleanup/) and secret-age's own (packages/secret_age/), all sharing
+    (packages/ocir_cleanup/) and secret-age's own (packages/secret_age/), all sharing
     packages/core. docker-apps runs three CronJobs from apps/security-scanner:
     security-scanner (Trivy, daily 11:00), cleanup-all (OCIR prune, daily 03:00) and
     secret-age-tracker (Sundays 12:00), each its own Component in that repo.

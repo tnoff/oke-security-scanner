@@ -1,6 +1,6 @@
 ---
 # RBAC for the GitLab runner to spawn one-off cleanup Jobs from the
-# cleanup CronJob template (packages/cleanup -- its own image/CronJob as
+# cleanup CronJob template (packages/ocir_cleanup -- its own image/CronJob as
 # of the package split, no longer a phase of the security-scanner one).
 #
 # A producer repo's pipeline (e.g. docker-apps) fires this immediately

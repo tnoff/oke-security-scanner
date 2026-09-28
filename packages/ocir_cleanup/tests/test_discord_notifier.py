@@ -1,4 +1,4 @@
-"""Tests for cleanup.discord_notifier module."""
+"""Tests for ocir_cleanup.discord_notifier module."""
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
@@ -13,7 +13,7 @@ class TestDiscordNotifier:
     @pytest.fixture
     def mock_dapper_table(self):
         """Mock DapperTable to avoid external dependency issues."""
-        with patch('cleanup.discord_notifier.DapperTable') as mock:
+        with patch('ocir_cleanup.discord_notifier.DapperTable') as mock:
             mock_instance = MagicMock()
             mock_instance.render.return_value = ["Test message"]
             mock_instance.__len__.return_value = 1
@@ -23,13 +23,13 @@ class TestDiscordNotifier:
     @pytest.fixture
     def notifier(self, mock_dapper_table):
         """Create a DiscordNotifier instance."""
-        from cleanup.discord_notifier import DiscordNotifier
+        from ocir_cleanup.discord_notifier import DiscordNotifier
         return DiscordNotifier("https://discord.com/api/webhooks/test")
 
     @patch('oke_scanner_core.discord_webhook.requests.post')
     def test_send_cleanup_recommendations(self, mock_post, notifier, mock_dapper_table):
         """Test sending cleanup recommendations."""
-        from cleanup.registry_client import CleanupRecommendation
+        from ocir_cleanup.registry_client import CleanupRecommendation
 
         mock_post.return_value = Mock(status_code=200)
         mock_post.return_value.raise_for_status = Mock()

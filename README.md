@@ -11,7 +11,7 @@ each its own CronJob:
 | Feature | OKE Specific | Description |
 | ------- | ------------ | ----------- |
 | Security Scanner | No | This repo's root package/image (`src/`, `python -m src.main`). Discovers all images in the K8s cluster and scans each with Trivy. |
-| OCIR Image Cleanup | Yes | Its own package/image (`packages/cleanup/`, `python -m cleanup`). Deletes old OCIR tags beyond a configurable `keep_count`, while protecting the deployed tag, `latest`, and any multi-arch sub-manifest digests referenced by kept tags. |
+| OCIR Image Cleanup | Yes | Its own package/image (`packages/ocir_cleanup/`, `python -m ocir_cleanup`). Deletes old OCIR tags beyond a configurable `keep_count`, while protecting the deployed tag, `latest`, and any multi-arch sub-manifest digests referenced by kept tags. |
 | Orphan Manifest Cleanup | Yes | Same package/image as OCIR Image Cleanup. Detects and removes `unknown@sha256:...` platform manifests in OCIR whose digest is no longer referenced by any tagged manifest list. |
 | Cache Management | No | Security Scanner only. Automatic cleanup of Trivy image cache after each scan to minimize disk usage. |
 | Secret-age Tracker | Yes | Its own package (`packages/secret_age/`) and its own image, with its own CronJob. Reports secrets ≥90 days old across OCI IAM credentials, Kubernetes Secrets — including `docker-apps` SealedSecrets, via the `secret-age-tracker.tnoff/last-rotated` annotation on their target Secret — and operator-tracked admin tfvars (via a layer-1 ledger ConfigMap). See the [docs corpus](https://github.com/tnoff/docs)'s `docs/projects/secret-age-tracker.md` (a separate repo, not this one's own `docs/`). Invoked as `python -m secret_age`. |
@@ -30,10 +30,10 @@ $ python -m src.main
 ```
 
 Cleanup and secret-age-tracker are separate installs — see
-[`packages/cleanup/`](./packages/cleanup) and
+[`packages/ocir_cleanup/`](./packages/ocir_cleanup) and
 [`packages/secret_age/`](./packages/secret_age) respectively (each has its
-own `pyproject.toml`; e.g. `pip install packages/core packages/cleanup &&
-python -m cleanup`).
+own `pyproject.toml`; e.g. `pip install packages/core packages/ocir_cleanup &&
+python -m ocir_cleanup`).
 
 See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for full local setup instructions (including the `[dev]` extras for running tests / linting).
 
@@ -41,7 +41,7 @@ Or use the docker build (one per image):
 
 ```
 $ docker build .                                  # security scanner
-$ docker build -f packages/cleanup/Dockerfile .    # OCIR cleanup
+$ docker build -f packages/ocir_cleanup/Dockerfile .    # OCIR cleanup
 $ docker build -f packages/secret_age/Dockerfile . # secret-age tracker
 ```
 
@@ -63,7 +63,7 @@ For kubernetes auth, you can use local auth creds or give a pod permissions to v
 
 ### OCI SDK
 
-`oci` is a dependency of `packages/cleanup` (and, separately, of
+`oci` is a dependency of `packages/ocir_cleanup` (and, separately, of
 `packages/secret_age`'s OCI IAM reader) — the security scanner itself no
 longer depends on it at all. Cleanup uses the OCI Python SDK for OCIR
 operations. It automatically derives:
@@ -85,7 +85,7 @@ key_file=~/.oci/oci_api_key.pem
 
 Docker credentials from `~/.docker/config.json` are used in two places, each in its own image:
 - **Trivy** (security scanner) uses them to pull images for vulnerability scanning.
-- **Image Cleanup** (`packages/cleanup`) uses them to fetch manifests via the Docker V2 API. When a kept image is a manifest list (multi-arch), it reads its sub-manifests and protects them from deletion, preventing "manifest unknown" pull errors in the cluster.
+- **Image Cleanup** (`packages/ocir_cleanup`) uses them to fetch manifests via the Docker V2 API. When a kept image is a manifest list (multi-arch), it reads its sub-manifests and protects them from deletion, preventing "manifest unknown" pull errors in the cluster.
 
 ## Cache Management
 
@@ -125,7 +125,7 @@ Kubernetes Secrets.
 | `EXCLUDE_NAMESPACES` | No | `kube-system,...` | Namespaces to exclude |
 | `DISCORD_WEBHOOK_URL` | No | (disabled) | Discord webhook URL for the scan report |
 
-**OCIR Cleanup** (`packages/cleanup/src/cleanup/main.py`, `python -m cleanup`):
+**OCIR Cleanup** (`packages/ocir_cleanup/src/ocir_cleanup/main.py`, `python -m ocir_cleanup`):
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|

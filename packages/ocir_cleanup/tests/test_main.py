@@ -1,19 +1,19 @@
-"""Tests for cleanup.main module."""
+"""Tests for ocir_cleanup.main module."""
 
 import pytest
 from unittest.mock import Mock, patch
-from cleanup.main import main, run_cleanup
+from ocir_cleanup.main import main, run_cleanup
 
 
 class TestMain:
     """Tests for main function."""
 
-    @patch('cleanup.main.DiscordNotifier')
-    @patch('cleanup.main.logging')
-    @patch('cleanup.main.CleanupConfig')
-    @patch('cleanup.main.setup_telemetry')
-    @patch('cleanup.main.KubernetesClient')
-    @patch('cleanup.main.RegistryClient')
+    @patch('ocir_cleanup.main.DiscordNotifier')
+    @patch('ocir_cleanup.main.logging')
+    @patch('ocir_cleanup.main.CleanupConfig')
+    @patch('ocir_cleanup.main.setup_telemetry')
+    @patch('ocir_cleanup.main.KubernetesClient')
+    @patch('ocir_cleanup.main.RegistryClient')
     def test_main_successful_run(
         self,
         mock_registry_client,
@@ -51,12 +51,12 @@ class TestMain:
         mock_meter_provider.force_flush.assert_called_once()
         mock_logger_provider.force_flush.assert_called_once()
 
-    @patch('cleanup.main.DiscordNotifier')
-    @patch('cleanup.main.logging')
-    @patch('cleanup.main.CleanupConfig')
-    @patch('cleanup.main.setup_telemetry')
-    @patch('cleanup.main.KubernetesClient')
-    @patch('cleanup.main.RegistryClient')
+    @patch('ocir_cleanup.main.DiscordNotifier')
+    @patch('ocir_cleanup.main.logging')
+    @patch('ocir_cleanup.main.CleanupConfig')
+    @patch('ocir_cleanup.main.setup_telemetry')
+    @patch('ocir_cleanup.main.KubernetesClient')
+    @patch('ocir_cleanup.main.RegistryClient')
     def test_main_with_discord_notification(
         self,
         mock_registry_client,
@@ -91,12 +91,12 @@ class TestMain:
 
         mock_discord.assert_called()
 
-    @patch('cleanup.main.DiscordNotifier')
-    @patch('cleanup.main.logging')
-    @patch('cleanup.main.CleanupConfig')
-    @patch('cleanup.main.setup_telemetry')
-    @patch('cleanup.main.KubernetesClient')
-    @patch('cleanup.main.RegistryClient')
+    @patch('ocir_cleanup.main.DiscordNotifier')
+    @patch('ocir_cleanup.main.logging')
+    @patch('ocir_cleanup.main.CleanupConfig')
+    @patch('ocir_cleanup.main.setup_telemetry')
+    @patch('ocir_cleanup.main.KubernetesClient')
+    @patch('ocir_cleanup.main.RegistryClient')
     def test_main_cleanup_enabled_skips_recommendations_sends_deletion(
         self,
         mock_registry_client,
@@ -135,12 +135,12 @@ class TestMain:
         mock_notifier.send_cleanup_recommendations.assert_not_called()
         mock_notifier.send_deletion_results.assert_called()
 
-    @patch('cleanup.main.DiscordNotifier')
-    @patch('cleanup.main.logging')
-    @patch('cleanup.main.CleanupConfig')
-    @patch('cleanup.main.setup_telemetry')
-    @patch('cleanup.main.KubernetesClient')
-    @patch('cleanup.main.RegistryClient')
+    @patch('ocir_cleanup.main.DiscordNotifier')
+    @patch('ocir_cleanup.main.logging')
+    @patch('ocir_cleanup.main.CleanupConfig')
+    @patch('ocir_cleanup.main.setup_telemetry')
+    @patch('ocir_cleanup.main.KubernetesClient')
+    @patch('ocir_cleanup.main.RegistryClient')
     def test_main_cleanup_disabled_sends_recommendations_skips_deletion(
         self,
         mock_registry_client,
@@ -178,11 +178,11 @@ class TestMain:
         mock_notifier.send_cleanup_recommendations.assert_called()
         mock_notifier.send_deletion_results.assert_not_called()
 
-    @patch('cleanup.main.DiscordNotifier')
-    @patch('cleanup.main.logging')
-    @patch('cleanup.main.CleanupConfig')
-    @patch('cleanup.main.setup_telemetry')
-    @patch('cleanup.main.KubernetesClient')
+    @patch('ocir_cleanup.main.DiscordNotifier')
+    @patch('ocir_cleanup.main.logging')
+    @patch('ocir_cleanup.main.CleanupConfig')
+    @patch('ocir_cleanup.main.setup_telemetry')
+    @patch('ocir_cleanup.main.KubernetesClient')
     def test_main_exception_still_flushes_telemetry(
         self,
         mock_k8s_client,
@@ -208,20 +208,20 @@ class TestMain:
         mock_meter_provider.force_flush.assert_called_once()
         mock_meter_provider.shutdown.assert_called_once()
 
-    @patch('cleanup.main.logging')
-    @patch('cleanup.main.CleanupConfig')
+    @patch('ocir_cleanup.main.logging')
+    @patch('ocir_cleanup.main.CleanupConfig')
     def test_main_returns_1_on_config_value_error(self, mock_config_class, _mock_logging):
         """A ValueError from CleanupConfig.from_env returns 1 rather than raising."""
         mock_config_class.from_env.side_effect = ValueError("bad config")
 
         assert main() == 1
 
-    @patch('cleanup.main.DiscordNotifier')
-    @patch('cleanup.main.logging')
-    @patch('cleanup.main.CleanupConfig')
-    @patch('cleanup.main.setup_telemetry')
-    @patch('cleanup.main.KubernetesClient')
-    @patch('cleanup.main.RegistryClient')
+    @patch('ocir_cleanup.main.DiscordNotifier')
+    @patch('ocir_cleanup.main.logging')
+    @patch('ocir_cleanup.main.CleanupConfig')
+    @patch('ocir_cleanup.main.setup_telemetry')
+    @patch('ocir_cleanup.main.KubernetesClient')
+    @patch('ocir_cleanup.main.RegistryClient')
     def test_main_logs_orphan_recs_and_deletion(
         self,
         mock_registry_client,
@@ -233,7 +233,7 @@ class TestMain:
     ):
         """Covers the orphan-recs log loop and the orphans-deleted log line."""
         from oke_scanner_core.image import Image
-        from cleanup.registry_client import CleanupRecommendation
+        from ocir_cleanup.registry_client import CleanupRecommendation
 
         mock_config = Mock()
         mock_config.discord_webhook_url = ""
@@ -266,9 +266,9 @@ class TestMain:
 class TestRunCleanup:
     """Tests for run_cleanup's CLEANUP_REPO scoping."""
 
-    @patch('cleanup.main.DiscordNotifier')
-    @patch('cleanup.main.RegistryClient')
-    @patch('cleanup.main.KubernetesClient')
+    @patch('ocir_cleanup.main.DiscordNotifier')
+    @patch('ocir_cleanup.main.RegistryClient')
+    @patch('ocir_cleanup.main.KubernetesClient')
     def test_run_cleanup_scoped_to_cleanup_repo(
         self, mock_k8s_client, mock_registry_client, _mock_discord, base_config
     ):
@@ -309,9 +309,9 @@ class TestRunCleanup:
         assert orphan_call.args[0] == {target}
         assert orphan_call.kwargs["extra_repositories"] == ["tnoff/discord_bot"]
 
-    @patch('cleanup.main.DiscordNotifier')
-    @patch('cleanup.main.RegistryClient')
-    @patch('cleanup.main.KubernetesClient')
+    @patch('ocir_cleanup.main.DiscordNotifier')
+    @patch('ocir_cleanup.main.RegistryClient')
+    @patch('ocir_cleanup.main.KubernetesClient')
     def test_run_cleanup_works_with_nothing_deployed(
         self, mock_k8s_client, mock_registry_client, _mock_discord, base_config
     ):
@@ -340,9 +340,9 @@ class TestRunCleanup:
         mock_registry_instance.get_orphaned_manifests.assert_called_once()
         mock_registry_instance.delete_ocir_images.assert_not_called()
 
-    @patch('cleanup.main.DiscordNotifier')
-    @patch('cleanup.main.RegistryClient')
-    @patch('cleanup.main.KubernetesClient')
+    @patch('ocir_cleanup.main.DiscordNotifier')
+    @patch('ocir_cleanup.main.RegistryClient')
+    @patch('ocir_cleanup.main.KubernetesClient')
     def test_run_cleanup_unscoped_uses_extra_repositories(
         self, mock_k8s_client, mock_registry_client, _mock_discord, base_config
     ):

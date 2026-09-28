@@ -5,5 +5,5 @@ Split out of the combined scan+cleanup image
 Prunes stale OCIR tags beyond a configurable keep_count and removes
 orphaned platform manifests, protecting the deployed tag, `latest`, and
 any multi-arch sub-manifest digests referenced by kept tags.
-Invoked as `python -m cleanup`.
+Invoked as `python -m ocir_cleanup`.
 """

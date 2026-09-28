@@ -1,7 +1,7 @@
-"""Tests for cleanup.config module."""
+"""Tests for ocir_cleanup.config module."""
 
 import pytest
-from cleanup.config import CleanupConfig
+from ocir_cleanup.config import CleanupConfig
 
 
 class TestCleanupConfig:

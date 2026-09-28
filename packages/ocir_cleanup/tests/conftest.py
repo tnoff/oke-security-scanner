@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock
-from cleanup.config import CleanupConfig
+from ocir_cleanup.config import CleanupConfig
 
 
 @pytest.fixture

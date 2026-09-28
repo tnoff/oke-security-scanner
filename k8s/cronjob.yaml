@@ -60,7 +60,7 @@ spec:
                 mountPath: /home/scanner/.cache/trivy
               # Docker config (~/.docker/config.json) — needed for Trivy to
               # pull private images for scanning. (OCIR cleanup's own
-              # ~/.oci/config mount lives in packages/cleanup's own
+              # ~/.oci/config mount lives in packages/ocir_cleanup's own
               # deployment now, not here — see docs/AGENTS.md.)
               - name: docker-config
                 mountPath: /home/scanner/.docker

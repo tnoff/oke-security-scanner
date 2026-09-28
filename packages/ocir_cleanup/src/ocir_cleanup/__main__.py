@@ -1,4 +1,4 @@
-"""So `python -m cleanup` invokes main()."""
+"""So `python -m ocir_cleanup` invokes main()."""
 
 import sys  # pragma: no cover
 

@@ -37,13 +37,14 @@ oke-security-scanner/
 │   │   │   ├── main.py, __main__.py, config.py, aggregator.py, finding.py, discord_report.py
 │   │   │   └── readers/  # k8s.py, layer1_ledger.py, oci_iam.py -- one per secret source
 │   │   └── tests/
-│   └── cleanup/          # cleanup-all: own package, own Dockerfile, own CronJob +
-│       │                 # entry point (`python -m cleanup`). No Trivy binary at all;
+│   └── ocir_cleanup/     # ocir-cleanup: own package, own Dockerfile, own CronJob +
+│       │                 # entry point (`python -m ocir_cleanup`). No Trivy binary at all;
 │       │                 # does use OpenTelemetry (unlike secret_age -- OTLP_METRICS_ENABLED
-│       │                 # and OTLP_LOGS_ENABLED are both genuinely on in cleanup-all.yaml).
+│       │                 # and OTLP_LOGS_ENABLED are both genuinely on in cleanup-all.yaml,
+│       │                 # the docker-apps CronJob's own name, unchanged by this rename).
 │       ├── Dockerfile
 │       ├── pyproject.toml
-│       ├── src/cleanup/
+│       ├── src/ocir_cleanup/
 │       │   ├── main.py, __main__.py, config.py, registry_client.py, discord_notifier.py
 │       └── tests/
 ├── tests/                # Pytest suite for src/ (scan only; 100% line coverage)
@@ -51,7 +52,7 @@ oke-security-scanner/
 ├── .github/workflows/    # GitHub Actions: ci.yml, release.yml, scheduled.yml
 ├── Dockerfile            # scan image: two-stage build (trivy-builder + py-builder + slim
 │                         # runtime) -- no build-essential; that only existed for oci's
-│                         # crc32c transitive dep, and oci left with packages/cleanup.
+│                         # crc32c transitive dep, and oci left with packages/ocir_cleanup.
 ├── pyproject.toml        # Python deps, build metadata, pylint config
 ├── tox.ini               # pytest / pylint / bandit envs -- covers src/ AND packages/*/src, see its own header comment
 ├── VERSION               # Semantic version
@@ -101,7 +102,7 @@ Gated behind the `oke-scanner-core[telemetry]` extra (see File Structure above) 
 Scan-only now: `create_metrics(meter_provider)` builds the `image_scan` gauge (returns `None` when its argument is `None`); `Metrics` is the dataclass wrapping it. Re-exports `setup_telemetry`/`shutdown_telemetry` from `oke_scanner_core.telemetry` so `src/main.py`'s existing `from .telemetry import ...` line didn't need to change.
 
 ### `src/main.py`
-Orchestration only, scan phase alone as of the package split (no `ENABLE_SCAN`/`ENABLE_CLEANUP` toggles or `run_cleanup` anymore -- see `packages/cleanup/src/cleanup/main.py` for that):
+Orchestration only, scan phase alone as of the package split (no `ENABLE_SCAN`/`ENABLE_CLEANUP` toggles or `run_cleanup` anymore -- see `packages/ocir_cleanup/src/ocir_cleanup/main.py` for that):
 
 - `run_scan(config, logger_provider, scanner_metrics, notifier) -> set[Image]` — updates the Trivy DB, lists pods via `oke_scanner_core.k8s_client.KubernetesClient`, scans every discovered image, posts the Discord report, emits metrics.
 
@@ -125,9 +126,9 @@ The `Image` dataclass: parses `registry / repo_name / tag`, strips digest suffix
 `load_k8s_config()` — tries `load_incluster_config()` first, falls back to `load_kube_config()` for local dev. Used by `KubernetesClient` above, and directly by `secret_age`'s own k8s/layer1_ledger readers (which don't use `KubernetesClient` at all).
 
 ### `packages/core/src/oke_scanner_core/discord_webhook.py`
-`DiscordWebhookClient(webhook_url)` — `send_message(content_list)` and `send_file(message_content, file_contents, file_name)`. Just the low-level webhook mechanics; report-shape formatting (which table columns, which result type) stays in the package that owns that report (`src/discord_notifier.py`'s `send_image_scan_report`, `packages/cleanup/src/cleanup/discord_notifier.py`'s `send_cleanup_recommendations`/`send_deletion_results`). Each of those wraps a `DiscordWebhookClient` internally rather than importing `requests` directly.
+`DiscordWebhookClient(webhook_url)` — `send_message(content_list)` and `send_file(message_content, file_contents, file_name)`. Just the low-level webhook mechanics; report-shape formatting (which table columns, which result type) stays in the package that owns that report (`src/discord_notifier.py`'s `send_image_scan_report`, `packages/ocir_cleanup/src/ocir_cleanup/discord_notifier.py`'s `send_cleanup_recommendations`/`send_deletion_results`). Each of those wraps a `DiscordWebhookClient` internally rather than importing `requests` directly.
 
-### `packages/cleanup/src/cleanup/registry_client.py`
+### `packages/ocir_cleanup/src/ocir_cleanup/registry_client.py`
 OCIR-only. There is no Docker Hub / ghcr.io version-check logic anymore. Moved verbatim out of `src/registry_client.py` -- `oci` is no longer a scan dependency at all, which is most of why the scan image dropped from 810.8 MB to 393.4 MB (measured; also dropped the `build-essential` stage entirely, since `crc32c` -- `oci`'s transitive dep that needed compiling -- left with it).
 
 Properties:
@@ -142,7 +143,7 @@ Key methods:
 - `get_old_ocir_images(images, keep_count, extra_repositories)` — returns `CleanupRecommendation`s of old commit-hash tags eligible for deletion, while preserving the deployed tag, `latest`, the newest `keep_count` tags, and any sub-manifests of kept tags.
 - `get_orphaned_manifests(images, extra_repositories)` — finds `unknown@sha256:...` platform manifests no longer referenced by any tagged manifest list.
 - `delete_ocir_images(cleanup_recommendations)` — deletes by OCID; 404s are treated as already-deleted. Returns `list[Image]` (returns `[]` when SDK unavailable — **not** `{}`).
-- `get_image_creation_date(image) -> Optional[datetime]` — public, but not called anywhere in `packages/cleanup/src/`; only `packages/cleanup/tests/test_registry_client.py` exercises it. Don't assume something calls this in production.
+- `get_image_creation_date(image) -> Optional[datetime]` — public, but not called anywhere in `packages/ocir_cleanup/src/`; only `packages/ocir_cleanup/tests/test_registry_client.py` exercises it. Don't assume something calls this in production.
 
 Safety guards:
 - Only OCIR images are considered (`image.is_ocir_image`).
@@ -151,17 +152,17 @@ Safety guards:
 - Orphan detection skips a repo entirely if no manifest lists can be resolved (avoids deleting needed manifests when Docker auth fails).
 - Deletion is opt-in via `OCIR_CLEANUP_ENABLED=true`.
 
-### `packages/cleanup/src/cleanup/main.py`
+### `packages/ocir_cleanup/src/ocir_cleanup/main.py`
 `run_cleanup(config, logger_provider, notifier)` — no `discovered_images` parameter (dropped along with the split: no deployed CronJob ever ran scan+cleanup combined in one process, so there was nothing live to preserve by keeping the hand-off). Always lists pods itself via `KubernetesClient`. If `CLEANUP_REPO` is set, the run is scoped to that single OCIR repo (image set filtered + `extra_repositories=[cleanup_repo]` so cleanup happens even with nothing deployed); otherwise it sweeps every image and uses `config.ocir_extra_repositories`.
 
 Producer pipelines fire a one-off Job with `CLEANUP_REPO=<repo>` so cleanup runs right after a push, without waiting for the daily cron. The deployed-tag protection still works: at push time the cluster is still running the old tag, so `get_old_ocir_images` finds it via k8s discovery and protects it.
 
 `main()` returns an `int` (0/1) rather than calling `sys.exit()` directly -- `__main__.py` does `sys.exit(main())`. This is a deliberate small deviation from `src/main.py`'s older `sys.exit(1)`-inline pattern, made possible because `CleanupConfig.from_env()` (unlike the old combined `Config`) has nothing left to validate and can't raise.
 
-### `src/discord_notifier.py` / `packages/cleanup/src/cleanup/discord_notifier.py`
+### `src/discord_notifier.py` / `packages/ocir_cleanup/src/ocir_cleanup/discord_notifier.py`
 Each package keeps only the report-shape method(s) it needs, both wrapping `oke_scanner_core.discord_webhook.DiscordWebhookClient`:
 - `src/discord_notifier.py`: `send_image_scan_report(complete_scan_result)`
-- `packages/cleanup/src/cleanup/discord_notifier.py`: `send_cleanup_recommendations(cleanup)`, `send_deletion_results(images, scanned_repos=None, is_orphaned=False)` — `scanned_repos` drives the "No `<repo>` ... deleted" reporting for clean repos
+- `packages/ocir_cleanup/src/ocir_cleanup/discord_notifier.py`: `send_cleanup_recommendations(cleanup)`, `send_deletion_results(images, scanned_repos=None, is_orphaned=False)` — `scanned_repos` drives the "No `<repo>` ... deleted" reporting for clean repos
 
 **Library API**: both use `dappertable` v1.1.x — `Column` / `Columns`, `DapperTable(columns=Columns([...]))`, `.render()`, `len(table)`. The older `DapperTableHeader` / `DapperTableHeaderOptions` / `.print()` / `.size` API is gone.
 
@@ -170,21 +171,21 @@ All values passed to `add_row` should be strings. Each paginated page is sent as
 ## Docker Image
 
 Three images now: this repo's root `Dockerfile` (scan), plus
-`packages/secret_age/Dockerfile` and `packages/cleanup/Dockerfile`. None of
+`packages/secret_age/Dockerfile` and `packages/ocir_cleanup/Dockerfile`. None of
 the other two have a Trivy stage; `packages/secret_age`'s also has no
-OpenTelemetry deps (`packages/cleanup`'s does -- `cleanup-all.yaml` genuinely
+OpenTelemetry deps (`packages/ocir_cleanup`'s does -- `cleanup-all.yaml` genuinely
 enables OTLP metrics+logs). This section covers the root `Dockerfile`.
 
 Two-stage Dockerfile (the `build-essential` compile stage is gone -- it only
 existed for `oci`'s `crc32c` transitive dep, and `oci` left with
-`packages/cleanup`):
+`packages/ocir_cleanup`):
 1. `trivy-builder` — `python:3.14-slim` + `curl` + `ca-certificates`, runs the official Trivy install script and drops the pinned `trivy` binary in `/usr/local/bin/`.
 2. `py-builder` — plain `python:3.14-slim`, runs `pip install --no-cache-dir --prefix=/install . ./packages/core` (needs `packages/core/pyproject.toml` + `packages/core/src` copied in too, since unlike `src/` there's no loose-copy fallback for an actually-`pip install`ed package).
 3. Final stage — `python:3.14-slim`, applies security upgrades, copies the `trivy` binary from `trivy-builder` and the installed packages from `py-builder`'s `/install` (`COPY --from=py-builder /install /usr/local`, no `pip install` in the final stage), copies `src/` as loose files (this is what makes `import src.config` resolve from the local tree rather than an empty installed `oke-security-scanner` wheel -- see tox.ini's header comment for the mechanism), runs as non-root `scanner` (UID 1000).
 
 The final image carries **no** `curl` / `wget` / `tar` / `git` / build toolchain. The Trivy DB is **not** pre-downloaded — `main()` fetches it on startup. Trivy version is pinned via `ARG TRIVY_VERSION` in the builder stage.
 
-Measured (not read off the Dockerfile), before/after the split: **810.8 MB → 393.4 MB** for this image; `packages/secret_age`'s own is 630.5 MB; `packages/cleanup`'s own is 658.0 MB.
+Measured (not read off the Dockerfile), before/after the split: **810.8 MB → 393.4 MB** for this image; `packages/secret_age`'s own is 630.5 MB; `packages/ocir_cleanup`'s own is 658.0 MB.
 
 ## CI/CD
 
@@ -220,7 +221,7 @@ Current state: **100% line coverage**, pylint 10.00/10, bandit clean.
 ## Common Tasks
 
 ### Adding a new configuration option
-1. Add the field to the relevant Config -- `Config` in `src/config.py` (scan), `CleanupConfig` in `packages/cleanup/src/cleanup/config.py`, or `SecretAgeConfig` in `packages/secret_age/src/secret_age/config.py`. These no longer share fields; adding a scan-only option doesn't touch the other two.
+1. Add the field to the relevant Config -- `Config` in `src/config.py` (scan), `CleanupConfig` in `packages/ocir_cleanup/src/ocir_cleanup/config.py`, or `SecretAgeConfig` in `packages/secret_age/src/secret_age/config.py`. These no longer share fields; adding a scan-only option doesn't touch the other two.
 2. Add it to `from_env()` with `os.getenv()` (and a default).
 3. Update that package's own `tests/conftest.py::base_config` fixture so existing tests still pass — it constructs the Config dataclass directly, so a missing field raises `TypeError`.
 4. Update the env-var table in `README.md` and `DEVELOPMENT.md`.
@@ -238,23 +239,23 @@ Current state: **100% line coverage**, pylint 10.00/10, bandit clean.
 5. **Don't add tracing spans** — tracing is intentionally not wired up.
 
 ### Adding a new metric
-1. Add the gauge/counter creation to `create_metrics()` in `src/telemetry.py` and add it as a field on the `Metrics` dataclass. (Scan-only concept -- `packages/cleanup` has no metrics instrument of its own today.)
+1. Add the gauge/counter creation to `create_metrics()` in `src/telemetry.py` and add it as a field on the `Metrics` dataclass. (Scan-only concept -- `packages/ocir_cleanup` has no metrics instrument of its own today.)
 2. Pass the `Metrics` instance to the module that needs it.
 3. Always check for `None` before recording (`if self.metrics:`).
 4. Document it in `README.md` if user-facing.
 
 ### Testing locally
 1. Ensure `kubectl` can reach the target cluster.
-2. Ensure `~/.oci/config` is set up if you intend to exercise OCIR paths (only relevant for `packages/cleanup` and `packages/secret_age` -- scan no longer touches OCI at all).
+2. Ensure `~/.oci/config` is set up if you intend to exercise OCIR paths (only relevant for `packages/ocir_cleanup` and `packages/secret_age` -- scan no longer touches OCI at all).
 3. Export any env vars you need (see DEVELOPMENT.md).
-4. Run: `python -m src.main` (scan), `python -m cleanup`, or `python -m secret_age`.
+4. Run: `python -m src.main` (scan), `python -m ocir_cleanup`, or `python -m secret_age`.
 
 ## Common Pitfalls
 
 1. **DO NOT** use `structlog` — stick to standard `logging.getLogger()`.
 2. **DO NOT** add tracing back without confirming intent — it was deliberately removed (logs + metrics only).
 3. **DO NOT** reintroduce `Image.version` / `ImageVersion` / semver comparison — they were removed along with the image-update check.
-4. **DO NOT** forget to update `tests/conftest.py::base_config` (scan) or `packages/cleanup/tests/conftest.py::base_config` when adding a field to the respective Config; each fixture constructs its dataclass directly, so a missing field raises `TypeError`.
+4. **DO NOT** forget to update `tests/conftest.py::base_config` (scan) or `packages/ocir_cleanup/tests/conftest.py::base_config` when adding a field to the respective Config; each fixture constructs its dataclass directly, so a missing field raises `TypeError`.
 5. **DO NOT** forget to check `if logger_provider:` / `if self.metrics:` before using them — both can be `None`.
 6. **DO NOT** commit real secrets — use `k8s/secret-example.yaml` as the template.
 7. **DO NOT** add a new unconditional import to `oke_scanner_core.telemetry` (or any other core module) without checking whether it belongs behind an extra — that module is the one place a careless addition would leak the OpenTelemetry SDK into `secret_age`'s image.

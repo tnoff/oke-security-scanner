@@ -1,8 +1,9 @@
 # Own the cleanup sweep's dependency set: kubernetes (via oke-scanner-core),
-# oci, requests, dappertable, the OpenTelemetry SDK/exporters (cleanup-all
-# genuinely uses OTLP logs+metrics, unlike secret-age-tracker). No Trivy
-# binary at all -- this image never scans an image. Build context is the
-# repo root so this stage can also COPY packages/core.
+# oci, requests, dappertable, the OpenTelemetry SDK/exporters (the
+# cleanup-all CronJob genuinely uses OTLP logs+metrics, unlike
+# secret-age-tracker). No Trivy binary at all -- this image never scans an
+# image. Build context is the repo root so this stage can also COPY
+# packages/core.
 FROM python:3.14-slim AS py-builder
 
 RUN apt-get update && \
@@ -12,9 +13,9 @@ RUN apt-get update && \
 WORKDIR /build
 COPY packages/core/pyproject.toml packages/core/pyproject.toml
 COPY packages/core/src packages/core/src
-COPY packages/cleanup/pyproject.toml packages/cleanup/pyproject.toml
-COPY packages/cleanup/src packages/cleanup/src
-RUN pip install --no-cache-dir --prefix=/install ./packages/core ./packages/cleanup
+COPY packages/ocir_cleanup/pyproject.toml packages/ocir_cleanup/pyproject.toml
+COPY packages/ocir_cleanup/src packages/ocir_cleanup/src
+RUN pip install --no-cache-dir --prefix=/install ./packages/core ./packages/ocir_cleanup
 
 
 FROM python:3.14-slim
@@ -30,4 +31,4 @@ USER scanner
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "-m", "cleanup"]
+CMD ["python", "-m", "ocir_cleanup"]
