@@ -7,38 +7,50 @@
 # techdocs-ref is set below now that mkdocs.yml + docs/ exist; the kubernetes
 # / grafana selectors still assert targets that don't exist yet, so they stay
 # out until those plugins are wired up.
+#
+# Four library Components now, one per real deployable
+# (docs/projects/oke-security-scanner-package-split.md), where there used to
+# be one standing in for all three CronJobs' image. Each of the three
+# CronJob Components in docker-apps' own catalog-info.yaml should
+# dependsOn its own library here, not all three on this one -- that edge
+# lives in docker-apps' descriptor, updated separately.
+#
+# This library is named secret-age-tracker, matching the package -- the naming
+# collision that would create (docker-apps' catalog-info.yaml already has a
+# service Component of that name for the CronJob; Backstage entity identity is
+# (kind, namespace, name), spec.type isn't part of it) is resolved on the
+# docker-apps side instead: that Component is renamed to
+# secret-age-tracker-cronjob there, following the same
+# name-doesn't-match-the-k8s-resource shape already documented for the
+# magic-mirror Components (backstage.io/kubernetes-id, not literal name
+# equality, is the intended fix once the Kubernetes plugin is wired up).
+#
+# techdocs-ref stays on oke-security-scanner only -- one canonical entity
+# per repo should own a given TechDocs site, not all four.
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: oke-security-scanner
   description: >-
-    Scans the images actually deployed in OKE for vulnerabilities, prunes stale OCIR tags,
-    and tracks secret ages, reporting over OpenTelemetry (secret-age-tracker excepted --
-    plain stdout logging, no OTLP). Two installable packages as of the
-    oke-security-scanner-package-split project: the combined scan+cleanup image (src/) and
-    secret-age's own (packages/secret_age/), sharing packages/core. docker-apps runs three
-    CronJobs from apps/security-scanner: security-scanner (Trivy, daily 11:00), cleanup-all
-    (OCIR prune, daily 03:00) and secret-age-tracker (Sundays 12:00), each its own Component
-    in that repo.
+    Discovers all images actually deployed in OKE and scans each with Trivy, reporting
+    over OpenTelemetry. Narrowed to just the scan package (src/) as of the
+    oke-security-scanner-package-split project -- cleanup and secret-age-tracking split
+    into their own libraries below, since they're now separate installable
+    packages/images, not phases of this one.
   annotations:
     backstage.io/techdocs-ref: dir:.
-  # `library` rather than `service`, changed once those three CronJob Components existed.
-  #
-  # Same call, same reasoning, as database-backup#226: while nothing in the catalog
-  # represented the deployed thing, this entity had to stand in for it. Now three
-  # Components do, and this is what it actually is -- an artifact they consume.
+  # `library` rather than `service`, changed once the CronJob Components in docker-apps
+  # existed. Same call, same reasoning, as database-backup#226: while nothing in the
+  # catalog represented the deployed thing, this entity had to stand in for it.
   #
   # `library` is not limited to pip-installable packages. MMM-BartTimes is `library` and
   # is a MagicMirror JS module baked into magic-mirror-docker's image; the working
   # definition is "a thing other components consume rather than a thing that runs on its
   # own". An image invoked from a CronJob is that.
   #
-  # No spec.system, matching database-backup and every other library here. The three
-  # CronJobs have none either -- see the note in docker-apps' descriptor for why no System
-  # was invented for them.
-  #
-  # No kubernetes annotation, and now for a better reason than "it is a scheduled Job":
-  # the pods belong to the three Components, which is where that annotation should go.
+  # No spec.system, matching database-backup and every other library here. The CronJobs
+  # have none either -- see the note in docker-apps' descriptor for why no System was
+  # invented for them.
 spec:
   type: library
   owner: group:default/admin
@@ -46,3 +58,55 @@ spec:
   dependsOn:
     - component:default/dappertable
     - component:default/github-workflows
+    - component:default/oke-scanner-core
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: oke-scanner-core
+  description: >-
+    Shared code underneath all three of this repo's other libraries: k8s in-cluster/
+    kubeconfig-fallback auth, image discovery (KubernetesClient, the Image dataclass),
+    and the low-level Discord webhook client. Never deployed or built into an image on
+    its own -- packages/core, installed alongside whichever package actually ships.
+spec:
+  type: library
+  owner: group:default/admin
+  lifecycle: production
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: secret-age-tracker
+  description: >-
+    Reports secrets ≥90 days old across OCI IAM credentials, Kubernetes Secrets, and
+    operator-tracked admin tfvars (via a layer-1 ledger ConfigMap). Its own package
+    (packages/secret_age/) and its own image; no Trivy, no OCIR cleanup code, no
+    OpenTelemetry at all (plain stdout logging). See the docs corpus's
+    docs/projects/secret-age-tracker.md for the feature itself.
+spec:
+  type: library
+  owner: group:default/admin
+  lifecycle: production
+  dependsOn:
+    - component:default/dappertable
+    - component:default/oke-scanner-core
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ocir-cleanup
+  description: >-
+    Prunes stale OCIR tags beyond a configurable keep_count and removes orphaned
+    platform manifests, protecting the deployed tag, latest, and any multi-arch
+    sub-manifest digests referenced by kept tags. Its own package
+    (packages/ocir_cleanup/) and its own image; no Trivy binary, but does use the
+    OpenTelemetry SDK (unlike secret-age-tracker -- the cleanup-all CronJob
+    genuinely enables OTLP metrics + logs).
+spec:
+  type: library
+  owner: group:default/admin
+  lifecycle: production
+  dependsOn:
+    - component:default/dappertable
+    - component:default/oke-scanner-core

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from unittest.mock import Mock, patch
 from src.scanner import TrivyScanner, ScanResult, CVE, CVEDetails, CompleteScanResult
-from src.k8s_client import Image
+from oke_scanner_core.image import Image
 
 
 class TestTrivyScanner:

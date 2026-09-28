@@ -9,18 +9,16 @@ RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/
     sh -s -- -b /usr/local/bin ${TRIVY_VERSION}
 
 
-# Compiles Python deps that don't ship aarch64 wheels for the runtime Python
-# (e.g. crc32c, a transitive dep of oci 2.178+). build-essential stays here;
-# the runtime stage copies only the installed packages out of /install.
+# No build-essential needed here now that `oci` (and its crc32c transitive
+# dep, the reason build-essential existed in this stage) moved out with
+# packages/cleanup -- scan no longer depends on the OCI SDK at all.
 FROM python:3.14-slim AS py-builder
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential && \
-    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 COPY pyproject.toml .
-RUN pip install --no-cache-dir --prefix=/install .
+COPY packages/core/pyproject.toml packages/core/pyproject.toml
+COPY packages/core/src packages/core/src
+RUN pip install --no-cache-dir --prefix=/install . ./packages/core
 
 
 FROM python:3.14-slim

@@ -9,8 +9,17 @@
 
 ## Setup
 
+Scan, cleanup and secret-age-tracker are separate installable packages now
+(see `docs/AGENTS.md`'s File Structure). To work on the scanner:
+
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev]" -e packages/core[telemetry]
+```
+
+To also work on cleanup or secret-age-tracker:
+
+```bash
+pip install -e packages/ocir_cleanup -e packages/secret_age
 ```
 
 ## Running tests
@@ -31,7 +40,11 @@ tox -e bandit    # security scan only
 
 ## Configuration
 
-The scanner is configured entirely via environment variables. All variables are optional and fall back to the defaults shown below.
+Scan and cleanup are separate processes now, each with its own env vars --
+no shared `Config`. The tables below are the scanner's; see
+`packages/ocir_cleanup/src/ocir_cleanup/config.py` for cleanup's own (same OTLP/
+namespace shape, plus the OCIR cleanup knobs, minus Trivy). All variables
+are optional and fall back to the defaults shown below.
 
 ### OTLP / OpenTelemetry
 
@@ -62,9 +75,11 @@ The scanner is configured entirely via environment variables. All variables are 
 | Variable | Default | Description |
 |---|---|---|
 | `DISCORD_WEBHOOK_URL` | _(disabled)_ | Webhook URL; notifications are skipped if unset |
-| `DISCORD_CLEANUP_WEBHOOK_URL` | _(falls back to `DISCORD_WEBHOOK_URL`)_ | Separate webhook for cleanup recommendations / deletion results |
 
 ### OCIR cleanup
+
+Cleanup-only (`packages/ocir_cleanup`, not the scanner) — listed here for
+reference since both packages' Config share the OTLP/namespace shape above:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -73,9 +88,7 @@ The scanner is configured entirely via environment variables. All variables are 
 | `OCIR_EXTRA_REPOSITORIES` | _(empty)_ | Comma-separated extra OCIR repos to include in cleanup |
 | `CLEANUP_PROTECT_TAGS_REGEX` | _(empty)_ | Tags whose name fully matches are excluded from the deletion pool |
 | `CLEANUP_GROUP_BY_REGEX` | _(empty)_ | When set, the candidate pool is grouped by the first capture group and `keep_count` is applied per group |
-| `ENABLE_SCAN` | `true` | Run the Trivy scan phase |
-| `ENABLE_CLEANUP` | `true` | Run the OCIR cleanup phase |
-| `CLEANUP_REPO` | _(empty)_ | Scope the cleanup phase to one OCIR repo, e.g. `tnoff/discord_bot` (see README) |
+| `CLEANUP_REPO` | _(empty)_ | Scope the run to one OCIR repo, e.g. `tnoff/discord_bot` (see README) |
 
 ## Running locally
 
@@ -83,5 +96,6 @@ The scanner is configured entirely via environment variables. All variables are 
 export KUBECONFIG=~/.kube/config
 # set any other variables you need ...
 
-python -m src.main
+python -m src.main   # scanner
+python -m ocir_cleanup    # OCIR cleanup (pip install -e packages/ocir_cleanup first)
 ```

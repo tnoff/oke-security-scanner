@@ -12,9 +12,9 @@ from datetime import datetime
 import requests
 import oci
 from oci.regions import REGIONS_SHORT_NAMES
+from oke_scanner_core.image import Image
 
-from .config import Config
-from .k8s_client import Image
+from .config import CleanupConfig
 
 logger = getLogger(__name__)
 
@@ -29,7 +29,7 @@ class CleanupRecommendation:
 class RegistryClient:
     """Client for interacting with container registry APIs."""
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: CleanupConfig):
         """Initialize registry client."""
         self.cfg = cfg
 

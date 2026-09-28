@@ -1,20 +1,13 @@
-"""OpenTelemetry configuration for logs and metrics."""
+"""Scan-specific telemetry: the "image_scan" gauge metric. Generic OTel
+setup/teardown lives in oke_scanner_core.telemetry, shared with cleanup.
+"""
 
-import logging
 from dataclasses import dataclass
 from typing import Any, Optional
-from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.resources import get_aggregated_resources, OTELResourceDetector
-from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
-from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry._logs import set_logger_provider
-from opentelemetry.instrumentation.logging.handler import LoggingHandler
+from oke_scanner_core.telemetry import setup_telemetry, shutdown_telemetry
 
-from .config import Config
+__all__ = ["setup_telemetry", "shutdown_telemetry", "Metrics", "create_metrics"]
 
 
 @dataclass
@@ -23,39 +16,6 @@ class Metrics:
 
     scan_total: Any  # OpenTelemetry Gauge instrument
 
-
-def setup_telemetry(cfg: Config) -> tuple[Optional[MeterProvider], Optional[LoggerProvider]]:
-    """Initialize OpenTelemetry with OTLP exporters based on configuration."""
-
-    resource = get_aggregated_resources(detectors=[OTELResourceDetector()])
-
-    meter_provider = None
-    logger_provider = None
-
-    # Metrics
-    if cfg.otlp_metrics_enabled:
-        metric_reader = PeriodicExportingMetricReader(
-            OTLPMetricExporter(),
-        )
-        meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
-        metrics.set_meter_provider(meter_provider)
-        logging.info("OTLP metrics enabled")
-    else:
-        logging.info("OTLP metrics disabled")
-
-    # Logs
-    if cfg.otlp_logs_enabled:
-        logger_provider = LoggerProvider()
-        set_logger_provider(logger_provider)
-        log_exporter = OTLPLogExporter()
-        logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
-        handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
-        logging.getLogger().addHandler(handler)
-        logging.info("OTLP logs enabled")
-    else:
-        logging.info("OTLP logs disabled")
-
-    return meter_provider, logger_provider
 
 def create_metrics(meter_provider: Optional[MeterProvider]) -> Optional[Metrics]:
     """Create application metrics.

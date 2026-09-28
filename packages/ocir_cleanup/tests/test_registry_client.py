@@ -6,8 +6,8 @@ import requests
 from unittest.mock import Mock, patch, mock_open
 from datetime import datetime, timezone, timedelta
 from oci.exceptions import ServiceError
-from src.registry_client import RegistryClient, CleanupRecommendation
-from src.k8s_client import Image
+from ocir_cleanup.registry_client import RegistryClient, CleanupRecommendation
+from oke_scanner_core.image import Image
 
 
 class TestRegistryClient:
@@ -18,7 +18,7 @@ class TestRegistryClient:
         """Use the shared base_config fixture."""
         return base_config
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_init_with_oci_sdk(self, mock_oci, config):
         """Test RegistryClient initialization with OCI SDK."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -38,7 +38,7 @@ class TestRegistryClient:
         assert client.oci_config == mock_config
         mock_oci.config.from_file.assert_called_once()
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_init_without_oci_sdk(self, mock_oci, config):
         """Test RegistryClient initialization when OCI SDK fails."""
         mock_oci.config.from_file.side_effect = Exception("No config file")
@@ -50,7 +50,7 @@ class TestRegistryClient:
         assert client.object_client is None
         assert client.oci_config is None
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_oci_namespace_property_fetches_from_object_storage(self, mock_oci, config):
         """Test oci_namespace property fetches namespace from Object Storage API."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -70,7 +70,7 @@ class TestRegistryClient:
         assert namespace == 'testnamespace'
         mock_object_client.get_namespace.assert_called_once()
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_oci_namespace_property_caches_result(self, mock_oci, config):
         """Test oci_namespace property caches the result after first fetch."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -96,7 +96,7 @@ class TestRegistryClient:
         # Should only call API once
         assert mock_object_client.get_namespace.call_count == 1
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_oci_namespace_property_returns_none_without_client(self, mock_oci, config):
         """Test oci_namespace property returns None when object client unavailable."""
         mock_oci.config.from_file.side_effect = Exception("No config")
@@ -106,7 +106,7 @@ class TestRegistryClient:
 
         assert namespace is None
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_oci_registry_property_caches_result(self, mock_oci, config):
         """Test oci_registry property caches the result after first derivation."""
         mock_config = {'tenancy': 'ocid1.tenancy.test', 'region': 'us-ashburn-1'}
@@ -127,7 +127,7 @@ class TestRegistryClient:
         assert registry1 == 'iad.ocir.io'
         assert registry2 == 'iad.ocir.io'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_oci_registry_property_returns_none_without_config(self, mock_oci, config):
         """Test oci_registry property returns None when OCI config unavailable."""
         mock_oci.config.from_file.side_effect = Exception("No config")
@@ -137,7 +137,7 @@ class TestRegistryClient:
 
         assert registry is None
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_strip_namespace_prefix_with_namespace(self, mock_oci, config):
         """Test _strip_namespace_prefix strips namespace prefix."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -157,7 +157,7 @@ class TestRegistryClient:
         assert client._strip_namespace_prefix('testnamespace/myapp') == 'myapp'
         assert client._strip_namespace_prefix('testnamespace/my-app') == 'my-app'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_strip_namespace_prefix_without_namespace(self, mock_oci, config):
         """Test _strip_namespace_prefix leaves repo unchanged if no namespace prefix."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -177,7 +177,7 @@ class TestRegistryClient:
         assert client._strip_namespace_prefix('myapp') == 'myapp'
         assert client._strip_namespace_prefix('my-app') == 'my-app'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_strip_namespace_prefix_different_namespace(self, mock_oci, config):
         """Test _strip_namespace_prefix leaves repo unchanged if different namespace."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -196,7 +196,7 @@ class TestRegistryClient:
         # Should not change if different namespace prefix
         assert client._strip_namespace_prefix('othernamespace/myapp') == 'othernamespace/myapp'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_strip_namespace_prefix_fallback_without_namespace(self, mock_oci, config):
         """Test _strip_namespace_prefix fallback when namespace unavailable."""
         mock_oci.config.from_file.side_effect = Exception("No config")
@@ -207,7 +207,7 @@ class TestRegistryClient:
         assert client._strip_namespace_prefix('anyprefix/myapp') == 'myapp'
         assert client._strip_namespace_prefix('myapp') == 'myapp'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_tenancy_id(self, mock_oci, config):
         """Test _get_tenancy_id method."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -221,7 +221,7 @@ class TestRegistryClient:
 
         assert tenancy_id == 'ocid1.tenancy.test'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_tenancy_id_no_config(self, mock_oci, config):
         """Test _get_tenancy_id when no config available."""
         mock_oci.config.from_file.side_effect = Exception("No config")
@@ -231,7 +231,7 @@ class TestRegistryClient:
 
         assert tenancy_id is None
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_list_all_compartments(self, mock_oci, config):
         """Test _list_all_compartments method."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -269,7 +269,7 @@ class TestRegistryClient:
         assert 'ocid1.compartment.2' in compartments
         assert 'ocid1.compartment.3' not in compartments
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_find_repository_compartment_cached(self, mock_oci, config):
         """Test _find_repository_compartment with cached result."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -285,7 +285,7 @@ class TestRegistryClient:
 
         assert compartment_id == 'ocid1.compartment.cached'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_ocir_images_via_sdk(self, mock_oci, config):
         """Test _get_ocir_images_via_sdk method."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -339,7 +339,7 @@ class TestRegistryClient:
         assert images[0].digest == 'sha256:aaa111'
         assert images[1].digest == 'sha256:bbb222'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_ocir_images_via_sdk_cached(self, mock_oci, config):
         """Test _get_ocir_images_via_sdk with cached data."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -361,7 +361,7 @@ class TestRegistryClient:
         # Should not call API when cached
         mock_artifacts_client.list_container_images.assert_not_called()
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_ocir_images_via_sdk_no_client(self, mock_oci, config):
         """Test _get_ocir_images_via_sdk when OCI client unavailable."""
         mock_oci.config.from_file.side_effect = Exception("No config")
@@ -372,7 +372,7 @@ class TestRegistryClient:
 
         assert images == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_returns_cleanup_recommendations(self, mock_oci, config):
         """Test get_old_ocir_images returns CleanupRecommendation for old images."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -415,7 +415,7 @@ class TestRegistryClient:
         # Should have 4 images to delete (10 - 1 current - 5 keep = 4)
         assert len(rec.tags_to_delete) == 4
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_includes_all_tag_types(self, mock_oci, config):
         """Test get_old_ocir_images includes semver, githash, and arbitrary tags in cleanup."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -459,7 +459,7 @@ class TestRegistryClient:
         assert 'dev-build-42' not in deleted_tags
         assert 'deployed' not in deleted_tags
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_excludes_latest_and_deployed(self, mock_oci, config):
         """Test get_old_ocir_images always excludes 'latest' tag and currently deployed image."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -499,7 +499,7 @@ class TestRegistryClient:
         assert 'abc1234' in deleted_tags
         assert 'old-tag' in deleted_tags
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_protects_digest_shared_with_kept_tag(self, mock_oci, config):
         """A byte-identical rebuild makes a commit-hash tag share :latest's
         manifest digest. OCIR dates a ContainerImage by when the digest first
@@ -565,7 +565,7 @@ class TestRegistryClient:
         mock_object_client.get_namespace.return_value = mock_response
         mock_oci.object_storage.ObjectStorageClient.return_value = mock_object_client
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_skips_repo_when_a_surviving_tag_has_no_digest(self, mock_oci, config):
         """Protection is digest equality, so a surviving tag with no digest cannot
         be protected — a candidate sharing its manifest would be deleted by OCID
@@ -597,7 +597,7 @@ class TestRegistryClient:
         # Without the guard, 3 of the 8 sha tags would be pruned here.
         assert recommendations == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_protects_candidate_with_no_digest(self, mock_oci, config):
         """A candidate whose own digest is unresolved is never deleted: the delete
         is by OCID, so an unidentified manifest is exactly what a shared digest
@@ -630,7 +630,7 @@ class TestRegistryClient:
         assert 'nodigest' not in deleted_tags
         assert deleted_tags == {'resolved'}
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_prunes_when_nothing_is_protected(self, mock_oci, config):
         """A repo with no :latest and a deployed tag absent from the listing leaves
         the protected set empty. Guarding the filter on a non-empty set used to
@@ -656,7 +656,7 @@ class TestRegistryClient:
         deleted_tags = {img.tag for img in recommendations[0].tags_to_delete}
         assert deleted_tags == {'sha0000', 'sha0001'}
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_protect_tags_regex(self, mock_oci, base_config):
         """CLEANUP_PROTECT_TAGS_REGEX excludes matching tags from the deletion pool."""
         from dataclasses import replace
@@ -700,7 +700,7 @@ class TestRegistryClient:
         # 4 immutables, keep_count=2 → 2 oldest get deleted
         assert deleted_tags == {'3.11-aaa', '3.11-bbb'}
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_protects_digest_shared_with_protected_channel_tag(self, mock_oci, base_config):
         """A byte-identical :3.X-<sha> rebuild shares the mutable :3.X channel
         tag's manifest digest. The channel tag is pulled from the delete pool by
@@ -757,7 +757,7 @@ class TestRegistryClient:
         # The distinct-digest stale immutable is still pruned — cleanup works.
         assert deleted_tags == {'3.13-stale'}
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_group_by_regex_tagless_image_goes_to_ungrouped(self, mock_oci, base_config):
         """Tagless images (e.g. digest-only manifests) fall into the _ungrouped bucket.
 
@@ -806,7 +806,7 @@ class TestRegistryClient:
         assert len(recommendations) == 1
         assert len(recommendations[0].tags_to_delete) == 3
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_group_by_regex_no_deletions(self, mock_oci, base_config):
         """When every group is at or under keep_count, no recommendation is emitted."""
         from dataclasses import replace
@@ -841,7 +841,7 @@ class TestRegistryClient:
 
         assert recommendations == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_group_by_regex_isolates_groups(self, mock_oci, base_config):
         """CLEANUP_GROUP_BY_REGEX applies keep_count per capture group.
 
@@ -896,7 +896,7 @@ class TestRegistryClient:
         # 3.11 group: 5 immutables, keep 2 newest (ddd, eee), delete 3 oldest
         assert deleted_tags == {'3.11-aaa', '3.11-bbb', '3.11-ccc'}
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_basic(self, mock_oci, config):
         """Test orphan detection: platform manifests not referenced by any normal tag's manifest list are orphans."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -949,7 +949,7 @@ class TestRegistryClient:
         assert 'ocid1.image.6' in orphan_ocids
         assert 'ocid1.image.7' in orphan_ocids
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_no_orphans(self, mock_oci, config):
         """Test no orphans when all platform manifests are referenced by normal tags."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -980,7 +980,7 @@ class TestRegistryClient:
 
         assert len(recommendations) == 0
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_all_orphans(self, mock_oci, config):
         """Test all platform manifests are orphans when no normal tags reference them."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -1015,7 +1015,7 @@ class TestRegistryClient:
         assert len(recommendations) == 1
         assert len(recommendations[0].tags_to_delete) == 3
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_latest_protected(self, mock_oci, config):
         """Test platform manifests referenced by latest's manifest list are NOT orphans."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -1054,7 +1054,7 @@ class TestRegistryClient:
         assert len(recommendations[0].tags_to_delete) == 1
         assert recommendations[0].tags_to_delete[0].ocid == 'ocid1.image.4'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_deployed_image_protected(self, mock_oci, config):
         """Test platform manifests referenced by deployed image's manifest list are NOT orphans."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -1098,7 +1098,7 @@ class TestRegistryClient:
         assert 'ocid1.image.4' in orphan_ocids
         assert 'ocid1.image.5' in orphan_ocids
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_skips_when_no_digests_resolved(self, mock_oci, config):
         """Test orphan detection skips repo when manifest list resolution fails entirely."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -1130,7 +1130,7 @@ class TestRegistryClient:
         # Should skip - not delete anything when we can't resolve manifests
         assert len(recommendations) == 0
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_delete_ocir_images(self, mock_oci, config):
         """Test delete_ocir_images deletes images via SDK."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -1161,7 +1161,7 @@ class TestRegistryClient:
         mock_artifacts_client.delete_container_image.assert_any_call('ocid1.image.1')
         mock_artifacts_client.delete_container_image.assert_any_call('ocid1.image.2')
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_delete_ocir_images_skips_already_deleted(self, mock_oci, config):
         """Test delete_ocir_images handles 404 for already-deleted images."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -1198,7 +1198,7 @@ class TestRegistryClient:
         assert len(deleted) == 2
         assert mock_artifacts_client.delete_container_image.call_count == 2
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_delete_ocir_images_no_client(self, mock_oci, config):
         """Test delete_ocir_images returns empty when no SDK client."""
         mock_oci.config.from_file.side_effect = Exception("No config")
@@ -1210,10 +1210,10 @@ class TestRegistryClient:
 
         assert result == []
 
-    @patch('src.registry_client.requests.get')
+    @patch('ocir_cleanup.registry_client.requests.get')
     @patch('builtins.open', new_callable=mock_open,
            read_data=json.dumps({'auths': {'iad.ocir.io': {'auth': 'dXNlcjpwYXNz'}}}))
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_docker_auth_basic_accepted(self, mock_oci, mock_file, mock_get, config):
         """Test _get_docker_auth returns Basic header when registry accepts it directly."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -1232,10 +1232,10 @@ class TestRegistryClient:
 
         assert result == {'Authorization': 'Basic dXNlcjpwYXNz'}
 
-    @patch('src.registry_client.requests.get')
+    @patch('ocir_cleanup.registry_client.requests.get')
     @patch('builtins.open', new_callable=mock_open,
            read_data=json.dumps({'auths': {'iad.ocir.io': {'auth': 'dXNlcjpwYXNz'}}}))
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_docker_auth_token_exchange(self, mock_oci, mock_file, mock_get, config):
         """Test _get_docker_auth does token exchange when registry requires Bearer auth."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -1267,7 +1267,7 @@ class TestRegistryClient:
         assert token_call[1]['params']['scope'] == 'repository:tnoff/myapp:pull'
 
     @patch('builtins.open', side_effect=FileNotFoundError)
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_docker_auth_missing_config(self, mock_oci, mock_file, config):
         """Test _get_docker_auth returns None when config file is missing."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -1283,7 +1283,7 @@ class TestRegistryClient:
 
     @patch('builtins.open', new_callable=mock_open,
            read_data=json.dumps({'auths': {'other.registry.io': {'auth': 'dXNlcjpwYXNz'}}}))
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_docker_auth_no_entry_for_registry(self, mock_oci, mock_file, config):
         """Test _get_docker_auth returns None when no entry for the registry."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -1297,8 +1297,8 @@ class TestRegistryClient:
 
         assert result is None
 
-    @patch('src.registry_client.requests.get')
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.requests.get')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_manifest_list_sub_digests_manifest_list(self, mock_oci, mock_get, config):
         """Test _get_manifest_list_sub_digests returns sub-digests for manifest lists."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -1328,8 +1328,8 @@ class TestRegistryClient:
 
         assert result == {'sha256:sub1', 'sha256:sub2'}
 
-    @patch('src.registry_client.requests.get')
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.requests.get')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_manifest_list_sub_digests_non_list(self, mock_oci, mock_get, config):
         """Test _get_manifest_list_sub_digests returns empty set for non-list manifests."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -1355,7 +1355,7 @@ class TestRegistryClient:
 
         assert result == set()
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_manifest_list_sub_digests_no_digest(self, mock_oci, config):
         """Test _get_manifest_list_sub_digests returns empty set when image has no digest."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -1370,8 +1370,8 @@ class TestRegistryClient:
 
         assert result == set()
 
-    @patch('src.registry_client.requests.get')
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.requests.get')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_manifest_list_sub_digests_api_error(self, mock_oci, mock_get, config):
         """Test _get_manifest_list_sub_digests returns empty set on API error."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -1389,7 +1389,7 @@ class TestRegistryClient:
 
         assert result == set()
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_protects_sub_manifest_digests(self, mock_oci, config):
         """Test get_old_ocir_images protects sub-manifest digests from deletion."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -1440,7 +1440,7 @@ class TestRegistryClient:
         # old2 (sha256:unrelated) should still be deleted
         assert 'old2' in deleted_tags
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_no_manifest_lists_no_regression(self, mock_oci, config):
         """Test get_old_ocir_images behaves unchanged when no manifest lists exist."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -1480,7 +1480,7 @@ class TestRegistryClient:
         # 8 total - 1 deployed - 3 kept = 4 to delete
         assert len(rec.tags_to_delete) == 4
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_excludes_platform_manifests(self, mock_oci, config):
         """Test get_old_ocir_images ignores platform manifests (unknown@sha256:...) entirely.
 
@@ -1538,7 +1538,7 @@ class TestRegistryClient:
         for img in rec.tags_to_delete:
             assert 'unknown@sha256:' not in img.full_name
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_delete_ocir_images_invalidates_cache(self, mock_oci, config):
         """Test that delete_ocir_images invalidates the cache for modified repos."""
         mock_config = {'tenancy': 'ocid1.tenancy.test'}
@@ -1573,7 +1573,7 @@ class TestRegistryClient:
         # Cache for other repos should remain
         assert 'testnamespace/other' in client._ocir_image_cache
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_old_image_cleanup_then_orphan_detection_deletes_intermediate_tags(self, mock_oci, config):
         """End-to-end: after old tags are deleted, orphan detection finds and removes
         their platform manifests while keeping platform manifests of surviving tags.
@@ -1717,7 +1717,7 @@ class TestRegistryClientCoverage:
 
     # --- oci_namespace / oci_registry error paths ---
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_oci_namespace_returns_none_when_object_storage_raises(self, mock_oci, config):
         """oci_namespace returns None and logs when get_namespace() raises."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test'}
@@ -1730,8 +1730,8 @@ class TestRegistryClientCoverage:
         client = RegistryClient(config)
         assert client.oci_namespace is None
 
-    @patch('src.registry_client.REGIONS_SHORT_NAMES', {'iad': 'us-ashburn-1'})
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.REGIONS_SHORT_NAMES', {'iad': 'us-ashburn-1'})
+    @patch('ocir_cleanup.registry_client.oci')
     def test_oci_registry_returns_none_when_region_not_found(self, mock_oci, config):
         """oci_registry returns None when the configured region has no short-name mapping."""
         mock_oci.config.from_file.return_value = {
@@ -1745,7 +1745,7 @@ class TestRegistryClientCoverage:
         client = RegistryClient(config)
         assert client.oci_registry is None
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_oci_registry_returns_none_when_region_lookup_raises(self, mock_oci, config):
         """oci_registry returns None when something unexpected raises during region lookup."""
         mock_oci.config.from_file.return_value = {'tenancy': 'ocid1.tenancy.test', 'region': 'us-ashburn-1'}
@@ -1763,13 +1763,13 @@ class TestRegistryClientCoverage:
 
     # --- _list_all_compartments early-return paths ---
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_list_all_compartments_returns_empty_without_identity_client(self, mock_oci, config):
         mock_oci.config.from_file.side_effect = Exception("no config")
         client = RegistryClient(config)
         assert client._list_all_compartments() == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_list_all_compartments_returns_empty_without_tenancy_id(self, mock_oci, config):
         mock_oci.config.from_file.return_value = {}  # no 'tenancy' key
         mock_oci.artifacts.ArtifactsClient.return_value = Mock()
@@ -1780,13 +1780,13 @@ class TestRegistryClientCoverage:
 
     # --- _find_repository_compartment search paths ---
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_find_repository_compartment_returns_none_without_artifacts_client(self, mock_oci, config):
         mock_oci.config.from_file.side_effect = Exception("no config")
         client = RegistryClient(config)
         assert client._find_repository_compartment('repo') is None
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_find_repository_compartment_finds_repo_after_404s(self, mock_oci, config):
         """_find_repository_compartment skips 404 errors and finds the repo in a later compartment."""
         mock_oci.exceptions.ServiceError = ServiceError
@@ -1814,7 +1814,7 @@ class TestRegistryClientCoverage:
         # Second call to find_repo for same repo hits the cache (no new API call)
         assert client._find_repository_compartment('repo') == 'ocid1.compartment.apps'
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_find_repository_compartment_logs_other_service_errors_and_continues(self, mock_oci, config):
         """Non-404 ServiceError is logged and the search continues."""
         mock_oci.exceptions.ServiceError = ServiceError
@@ -1830,7 +1830,7 @@ class TestRegistryClientCoverage:
 
     # --- _get_ocir_images_via_sdk edge cases ---
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_ocir_images_via_sdk_returns_empty_when_compartment_not_found(self, mock_oci, config):
         self._make_client(mock_oci)
         client = RegistryClient(config)
@@ -1840,7 +1840,7 @@ class TestRegistryClientCoverage:
             result = client._get_ocir_images_via_sdk(Image('iad.ocir.io/ns/app:v1'))
         assert result == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_ocir_images_via_sdk_skips_items_with_no_version_and_no_digest(self, mock_oci, config):
         """Items missing both version and digest are skipped (rare but defended)."""
         self._make_client(mock_oci)
@@ -1873,10 +1873,10 @@ class TestRegistryClientCoverage:
 
     # --- _get_docker_auth / _get_manifest_list_sub_digests ---
 
-    @patch('src.registry_client.requests.get')
+    @patch('ocir_cleanup.registry_client.requests.get')
     @patch('builtins.open', new_callable=mock_open,
            read_data=json.dumps({'auths': {'iad.ocir.io': {'auth': 'dXNlcjpwYXNz'}}}))
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_docker_auth_returns_none_on_request_exception(self, mock_oci, _mock_file, mock_get, config):
         """When the /v2/ probe raises a RequestException, _get_docker_auth returns None."""
         self._make_client(mock_oci)
@@ -1886,7 +1886,7 @@ class TestRegistryClientCoverage:
         result = client._get_docker_auth(Image('iad.ocir.io/ns/app:v1'))
         assert result is None
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_manifest_list_sub_digests_returns_empty_without_auth(self, mock_oci, config):
         """No Docker auth headers -> empty set of sub-digests."""
         self._make_client(mock_oci)
@@ -1897,7 +1897,7 @@ class TestRegistryClientCoverage:
 
     # --- get_image_creation_date ---
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_image_creation_date_returns_cached_for_ocir(self, mock_oci, config):
         self._make_client(mock_oci)
         client = RegistryClient(config)
@@ -1910,7 +1910,7 @@ class TestRegistryClientCoverage:
             result = client.get_image_creation_date(Image('iad.ocir.io/ns/app:v1.0.0'))
         assert result == datetime(2024, 6, 1, tzinfo=timezone.utc)
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_image_creation_date_returns_none_for_ocir_without_match(self, mock_oci, config):
         self._make_client(mock_oci)
         client = RegistryClient(config)
@@ -1918,7 +1918,7 @@ class TestRegistryClientCoverage:
             result = client.get_image_creation_date(Image('iad.ocir.io/ns/app:v1.0.0'))
         assert result is None
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_image_creation_date_returns_none_for_non_ocir(self, mock_oci, config):
         self._make_client(mock_oci)
         client = RegistryClient(config)
@@ -1926,7 +1926,7 @@ class TestRegistryClientCoverage:
 
     # --- get_old_ocir_images skip/early-return branches ---
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_adds_extra_repositories(self, mock_oci, config):
         """extra_repositories synthesizes ':latest' Image entries into the scan set."""
         self._make_client(mock_oci)
@@ -1939,7 +1939,7 @@ class TestRegistryClientCoverage:
             result = client.get_old_ocir_images(set(), extra_repositories=['ns/extra'])
         assert result == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_extras_skip_repo_already_in_images(self, mock_oci, config):
         """Regression: when CLEANUP_REPO matches a real deployed image, the synthetic
         `:latest` extras entry must not be added — otherwise set iteration order
@@ -1991,7 +1991,7 @@ class TestRegistryClientCoverage:
         # `images` was not polluted with a synthetic `:latest` Image.
         assert not any(im.tag == 'latest' for im in images)
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_skips_already_processed_repo(self, mock_oci, config):
         """Two images for the same repo: the second is skipped via repo_names_processed.
 
@@ -2029,14 +2029,14 @@ class TestRegistryClientCoverage:
         # The SDK was called exactly once -> second image hit the duplicate-skip branch
         assert sdk_calls['count'] == 1
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_skips_non_ocir_images(self, mock_oci, config):
         self._make_client(mock_oci)
         client = RegistryClient(config)
         result = client.get_old_ocir_images([Image('docker.io/library/nginx:latest')])
         assert result == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_skips_when_under_keep_count(self, mock_oci, config):
         """When filtered tag count <= keep_count, no recommendation is produced."""
         self._make_client(mock_oci)
@@ -2055,7 +2055,7 @@ class TestRegistryClientCoverage:
             result = client.get_old_ocir_images([deployed], keep_count=5)
         assert result == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_old_ocir_images_skips_when_all_candidates_protected(self, mock_oci, config):
         """If every old image's digest is referenced by a kept manifest list, nothing is recommended."""
         self._make_client(mock_oci)
@@ -2080,7 +2080,7 @@ class TestRegistryClientCoverage:
 
     # --- get_orphaned_manifests skip/early-return branches ---
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_adds_extra_repositories(self, mock_oci, config):
         self._make_client(mock_oci)
         client = RegistryClient(config)
@@ -2090,7 +2090,7 @@ class TestRegistryClientCoverage:
             result = client.get_orphaned_manifests(set(), extra_repositories=['ns/extra'])
         assert result == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_extras_skip_repo_already_in_images(self, mock_oci, config):
         """Mirror of the get_old_ocir_images regression: an extras entry whose repo
         is already covered by a real OCIR image in `images` must not add a synthetic
@@ -2107,7 +2107,7 @@ class TestRegistryClientCoverage:
 
         assert not any(im.tag == 'latest' for im in images)
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_skips_already_processed_repo(self, mock_oci, config):
         self._make_client(mock_oci)
         client = RegistryClient(config)
@@ -2117,14 +2117,14 @@ class TestRegistryClientCoverage:
         with patch.object(client, '_get_ocir_images_via_sdk', return_value=[]):
             client.get_orphaned_manifests([img1, img2])  # second skipped via repo_names_processed
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_skips_non_ocir(self, mock_oci, config):
         self._make_client(mock_oci)
         client = RegistryClient(config)
         result = client.get_orphaned_manifests([Image('docker.io/library/nginx:latest')])
         assert result == []
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_get_orphaned_manifests_skips_when_no_platform_manifests_present(self, mock_oci, config):
         """Repo has tags but no platform manifests → skipped without errors."""
         self._make_client(mock_oci)
@@ -2138,7 +2138,7 @@ class TestRegistryClientCoverage:
 
     # --- delete_ocir_images ServiceError handling ---
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_delete_ocir_images_skips_404_and_keeps_going(self, mock_oci, config):
         """A 404 on delete is treated as already-deleted; the image still appears in results."""
         mock_oci.exceptions.ServiceError = ServiceError
@@ -2154,7 +2154,7 @@ class TestRegistryClientCoverage:
         deleted = client.delete_ocir_images([rec])
         assert deleted == [img]
 
-    @patch('src.registry_client.oci')
+    @patch('ocir_cleanup.registry_client.oci')
     def test_delete_ocir_images_reraises_non_404_service_errors(self, mock_oci, config):
         """A non-404 ServiceError propagates out of delete_ocir_images."""
         mock_oci.exceptions.ServiceError = ServiceError

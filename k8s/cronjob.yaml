@@ -55,32 +55,19 @@ spec:
               #     secretKeyRef:
               #       name: security-scanner-config
               #       key: DISCORD_WEBHOOK_URL
-
-              # OCIR cleanup (optional; see README for the full env-var reference)
-              # - name: OCIR_CLEANUP_ENABLED
-              #   value: "true"
-              # - name: OCIR_CLEANUP_KEEP_COUNT
-              #   value: "5"
             volumeMounts:
               - name: trivy-cache
                 mountPath: /home/scanner/.cache/trivy
-              # OCI SDK config (~/.oci/config) — needed for OCIR list/delete calls.
-              - name: oci-config
-                mountPath: /home/scanner/.oci
-                readOnly: true
-              # Docker config (~/.docker/config.json) — needed when resolving
-              # multi-arch manifest lists in OCIR during orphan detection.
+              # Docker config (~/.docker/config.json) — needed for Trivy to
+              # pull private images for scanning. (OCIR cleanup's own
+              # ~/.oci/config mount lives in packages/ocir_cleanup's own
+              # deployment now, not here — see docs/AGENTS.md.)
               - name: docker-config
                 mountPath: /home/scanner/.docker
                 readOnly: true
           volumes:
             - name: trivy-cache
               emptyDir: {}
-            - name: oci-config
-              secret:
-                secretName: security-scanner-oci-config
-                # Secret must contain keys `config` and `oci_api_key.pem`
-                defaultMode: 0400
             - name: docker-config
               secret:
                 secretName: security-scanner-docker-config
