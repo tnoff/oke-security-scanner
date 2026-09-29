@@ -44,8 +44,9 @@ oke-utilities/
 │   └── ocir_cleanup/     # ocir-cleanup: own package, own Dockerfile, own CronJob +
 │       │                 # entry point (`python -m ocir_cleanup`). No Trivy binary at all;
 │       │                 # does use OpenTelemetry (unlike secret_age -- OTLP_METRICS_ENABLED
-│       │                 # and OTLP_LOGS_ENABLED are both genuinely on in cleanup-all.yaml,
-│       │                 # the docker-apps CronJob's own name, unchanged by this rename).
+│       │                 # and OTLP_LOGS_ENABLED are both genuinely on in
+│       │                 # ocir-cleanup-cronjob.yaml, the docker-apps CronJob's own name --
+│       │                 # renamed from cleanup-all, see docker-apps' rename PR).
 │       ├── Dockerfile
 │       ├── pyproject.toml
 │       ├── src/ocir_cleanup/
@@ -183,7 +184,7 @@ Four packages, four `Dockerfile`s, all under `packages/*/Dockerfile` now
 match the other three -- see
 docs/projects/oke-security-scanner-package-split.md). Only `packages/scan/
 Dockerfile` has a Trivy stage; `packages/secret_age`'s also has no
-OpenTelemetry deps (`packages/ocir_cleanup`'s does -- `cleanup-all.yaml`
+OpenTelemetry deps (`packages/ocir_cleanup`'s does -- `ocir-cleanup-cronjob.yaml`
 genuinely enables OTLP metrics+logs). This section covers
 `packages/scan/Dockerfile`.
 

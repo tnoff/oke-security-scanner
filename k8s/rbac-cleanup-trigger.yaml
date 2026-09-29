@@ -3,11 +3,23 @@
 # cleanup CronJob template (packages/ocir_cleanup -- its own image/CronJob as
 # of the package split, no longer a phase of the security-scanner one).
 #
-# A producer repo's pipeline (e.g. docker-apps) fires this immediately
+# NOT believed to be deployed anywhere today, and possibly describing a
+# retired mechanism rather than a live one: docker-apps'
+# ocir-cleanup-cronjob.yaml (renamed from cleanup-all) states outright that
+# "the per-push cleanup-<producer> CI jobs were retired", and the deployed
+# docker-apps/apps/security-scanner/rbac.yaml grants an unrestricted
+# (no resourceNames) `get` on cronjobs instead of this file's exact-name
+# scoping -- a different, still-live per-push trigger for suspended
+# cleanup-<producer> templates, not this one. Kept here as an example
+# rather than removed outright since that's a separate cleanup from
+# renaming the CronJob this file references; flagged for whoever picks
+# that up next.
+#
+# A producer repo's pipeline (e.g. docker-apps) would fire this immediately
 # after a new image is pushed by running:
 #
 #   kubectl -n <SCANNER_NS> create job cleanup-<repo>-<sha> \
-#     --from=cronjob/cleanup-all --dry-run=client -o json \
+#     --from=cronjob/ocir-cleanup-cronjob --dry-run=client -o json \
 #   | jq '.spec.template.spec.containers[0].env += [
 #         {"name":"CLEANUP_REPO","value":"<ocir-repo>"},
 #         {"name":"OCIR_CLEANUP_ENABLED","value":"true"}
@@ -29,7 +41,7 @@ metadata:
 rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
-    resourceNames: ["cleanup-all"]
+    resourceNames: ["ocir-cleanup-cronjob"]
     verbs: ["get"]
   - apiGroups: ["batch"]
     resources: ["jobs"]

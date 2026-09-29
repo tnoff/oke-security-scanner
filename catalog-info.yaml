@@ -109,8 +109,8 @@ metadata:
     platform manifests, protecting the deployed tag, latest, and any multi-arch
     sub-manifest digests referenced by kept tags. Its own package
     (packages/ocir_cleanup/) and its own image; no Trivy binary, but does use the
-    OpenTelemetry SDK (unlike secret-age-tracker -- the cleanup-all CronJob
-    genuinely enables OTLP metrics + logs).
+    OpenTelemetry SDK (unlike secret-age-tracker -- the ocir-cleanup-cronjob
+    CronJob genuinely enables OTLP metrics + logs).
 spec:
   type: library
   owner: group:default/admin

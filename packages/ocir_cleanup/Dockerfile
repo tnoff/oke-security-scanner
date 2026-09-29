@@ -1,6 +1,6 @@
 # Own the cleanup sweep's dependency set: kubernetes (via oke-scanner-core),
 # oci, requests, dappertable, the OpenTelemetry SDK/exporters (the
-# cleanup-all CronJob genuinely uses OTLP logs+metrics, unlike
+# ocir-cleanup-cronjob CronJob genuinely uses OTLP logs+metrics, unlike
 # secret-age-tracker). No Trivy binary at all -- this image never scans an
 # image. Build context is the repo root so this stage can also COPY
 # packages/core.
