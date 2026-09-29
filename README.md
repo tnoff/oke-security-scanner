@@ -157,7 +157,7 @@ image can fire a one-off Job derived from the **cleanup CronJob template**
 
 ```bash
 kubectl -n default create job "cleanup-${REPO}-${TAG}" \
-  --from=cronjob/cleanup-all --dry-run=client -o json \
+  --from=cronjob/ocir-cleanup-cronjob --dry-run=client -o json \
 | jq '.spec.template.spec.containers[0].env += [
     {"name":"CLEANUP_REPO","value":"'"$OCIR_REPO"'"},
     {"name":"OCIR_CLEANUP_ENABLED","value":"true"}

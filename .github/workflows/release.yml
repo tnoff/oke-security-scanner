@@ -215,7 +215,10 @@ jobs:
     name: Trigger docker-apps bump (ocir-cleanup)
     needs: push-image-ocir-cleanup
     uses: tnoff/github-workflows/.github/workflows/trigger-bump-dispatch.yml@bad6dacd6d4d75b465314b1ec984efd86cc8f5e6
-    # Rewrites the pin in docker-apps apps/security-scanner/cleanup-all.yaml.
+    # Rewrites the pin in docker-apps images/kustomization.yaml for the
+    # ocir_cleanup image, consumed by
+    # apps/security-scanner/ocir-cleanup-cronjob.yaml (renamed from
+    # cleanup-all.yaml).
     with:
       bump_source: ocir-cleanup
       image: ${{ needs.push-image-ocir-cleanup.outputs.image }}

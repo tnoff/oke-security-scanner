@@ -3,7 +3,7 @@
 Split out of the combined oke-security-scanner image
 (docs/projects/oke-security-scanner-package-split.md). No deployed
 CronJob ever ran scan+cleanup combined in one process (cronjob.yaml sets
-ENABLE_CLEANUP=false, cleanup-all.yaml sets ENABLE_SCAN=false), so there is
+ENABLE_CLEANUP=false, ocir-cleanup-cronjob.yaml sets ENABLE_SCAN=false), so there is
 no discovered_images hand-off to preserve -- this always discovers images
 itself.
 """
