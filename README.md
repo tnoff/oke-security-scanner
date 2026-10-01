@@ -205,3 +205,12 @@ image's own `DISCORD_WEBHOOK_URL` independently — the scanner posts the
 scan report, cleanup posts recommendations/deletion results; they are two
 separate webhook configs now, not a shared URL with a cleanup-specific
 override.
+
+### Deletion report format
+
+Both cleanup passes (old tags, orphan manifests) post one entry per scanned repo, not a table:
+`Deleted N <repo> images:` plus a code block of tags for repos with deletions, and an explicit
+`No <repo> images deleted.` line for repos that came back clean. The `## Images Deleted` heading appears
+only when something was deleted; a run that scanned nothing posts `No images were deleted.`. The clean
+repo names come from the scanned set (deployed OCIR repos plus `OCIR_EXTRA_REPOSITORIES`) that `main.py`
+passes to the notifier, because a `CleanupRecommendation` exists only for a repo with something to delete.
