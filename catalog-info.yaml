@@ -67,6 +67,8 @@ spec:
     - component:default/dappertable
     - component:default/github-workflows
     - component:default/oke-scanner-core
+  consumesApis:
+    - api:default/image-bump
 ---
 apiVersion: backstage.io/v1alpha1
 kind: Component
@@ -99,6 +101,8 @@ spec:
   dependsOn:
     - component:default/dappertable
     - component:default/oke-scanner-core
+  consumesApis:
+    - api:default/image-bump
 ---
 apiVersion: backstage.io/v1alpha1
 kind: Component
@@ -118,3 +122,5 @@ spec:
   dependsOn:
     - component:default/dappertable
     - component:default/oke-scanner-core
+  consumesApis:
+    - api:default/image-bump
