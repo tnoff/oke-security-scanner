@@ -2,15 +2,14 @@
 
 Context for AI agents (Claude, GPT, etc.) working on this codebase.
 
-For **what the project does**, **how to install/run it**, **env-var reference**, **authentication setup**, and the **Kubernetes deployment shape**, read [README.md](../README.md). For **local-dev setup** and the **DEV env-var reference**, read [DEVELOPMENT.md](./DEVELOPMENT.md). This file covers only the things an agent needs that aren't in those docs.
+For **what the project does**, **how to install/run it**, **env-var reference** (all three packages) and **authentication setup**, read [README.md](README.md). The deployed CronJobs (schedules, RBAC, Secrets, operations) live in `tnoff/docker-apps` (`apps/security-scanner/`, TechDocs at `techdocs/oke-utilities`). For **local-dev setup**, read [DEVELOPMENT.md](DEVELOPMENT.md). This file covers only the things an agent needs that aren't in those docs.
 
 ## File Structure
 
 ```
 oke-utilities/
-├── packages/             # Four separate installable packages/images -- see
-│   │                     # docs/projects/oke-security-scanner-package-split.md.
-│   │                     # None carries its own dev-tool versions or pylint
+├── packages/             # Core library plus three separate installable
+│   │                     # packages/images. None carries its own dev-tool versions or pylint
 │   │                     # config; root pyproject.toml is the single source
 │   │                     # for both (see Code Quality below).
 │   ├── core/             # oke-scanner-core: shared by scan/secret_age/ocir_cleanup.
@@ -43,16 +42,14 @@ oke-utilities/
 │   │   └── tests/
 │   └── ocir_cleanup/     # ocir-cleanup: own package, own Dockerfile, own CronJob +
 │       │                 # entry point (`python -m ocir_cleanup`). No Trivy binary at all;
-│       │                 # does use OpenTelemetry (unlike secret_age -- OTLP_METRICS_ENABLED
-│       │                 # and OTLP_LOGS_ENABLED are both genuinely on in
-│       │                 # ocir-cleanup-cronjob.yaml, the docker-apps CronJob's own name --
-│       │                 # renamed from cleanup-all, see docker-apps' rename PR).
+│       │                 # does use OpenTelemetry (unlike secret_age; the docker-apps
+│       │                 # ocir-cleanup-cronjob enables OTLP metrics and logs).
 │       ├── Dockerfile
 │       ├── pyproject.toml
 │       ├── src/ocir_cleanup/
 │       │   ├── main.py, __main__.py, config.py, registry_client.py, discord_notifier.py
 │       └── tests/
-├── k8s/                  # CronJob + RBAC + Secret examples
+├── k8s/                  # Generic scanner CronJob + RBAC + Secret examples (not the deployed manifests)
 ├── .github/workflows/    # GitHub Actions: ci.yml, release.yml, scheduled.yml
 ├── pyproject.toml        # No importable code of its own -- see Code Quality below.
 │                         # Just the dev-tool versions tox installs and the
@@ -111,11 +108,11 @@ Gated behind the `oke-scanner-core[telemetry]` extra (see File Structure above) 
 Scan-only now: `create_metrics(meter_provider)` builds the `image_scan` gauge (returns `None` when its argument is `None`); `Metrics` is the dataclass wrapping it. Re-exports `setup_telemetry`/`shutdown_telemetry` from `oke_scanner_core.telemetry` so `main.py`'s existing `from .telemetry import ...` line didn't need to change.
 
 ### `packages/scan/src/scan/main.py`
-Orchestration only, scan phase alone as of the package split (no `ENABLE_SCAN`/`ENABLE_CLEANUP` toggles or `run_cleanup` anymore -- see `packages/ocir_cleanup/src/ocir_cleanup/main.py` for that):
+Orchestration only (cleanup is in `packages/ocir_cleanup/src/ocir_cleanup/main.py`):
 
 - `run_scan(config, logger_provider, scanner_metrics, notifier) -> set[Image]` — updates the Trivy DB, lists pods via `oke_scanner_core.k8s_client.KubernetesClient`, scans every discovered image, posts the Discord report, emits metrics.
 
-The `if __name__ == "__main__":` guard is marked `# pragma: no cover` (standard untestable pattern). A separate `__main__.py` also does `sys.exit(main())` so `python -m scan` works -- `main()` itself still returns `None`, matching its pre-split behavior (an unhandled exception exits non-zero either way; nothing here signals failure via an explicit return code).
+The `if __name__ == "__main__":` guard is marked `# pragma: no cover` (standard untestable pattern). A separate `__main__.py` does `sys.exit(main())` so `python -m scan` works.
 
 ### `packages/scan/src/scan/scanner.py`
 - `update_database()` — runs `trivy image --download-db-only` once at startup; logs and continues on timeout/error.
@@ -138,7 +135,7 @@ The `Image` dataclass: parses `registry / repo_name / tag`, strips digest suffix
 `DiscordWebhookClient(webhook_url)` — `send_message(content_list)` and `send_file(message_content, file_contents, file_name)`. Just the low-level webhook mechanics; report-shape formatting (which table columns, which result type) stays in the package that owns that report (`packages/scan/src/scan/discord_notifier.py`'s `send_image_scan_report`, `packages/ocir_cleanup/src/ocir_cleanup/discord_notifier.py`'s `send_cleanup_recommendations`/`send_deletion_results`). Each of those wraps a `DiscordWebhookClient` internally rather than importing `requests` directly.
 
 ### `packages/ocir_cleanup/src/ocir_cleanup/registry_client.py`
-OCIR-only. There is no Docker Hub / ghcr.io version-check logic anymore. Moved verbatim out of what was then the root `src/registry_client.py` -- `oci` is no longer a scan dependency at all, which is most of why the scan image dropped from 810.8 MB to ~393 MB at the time of that split (measured; also dropped the `build-essential` stage entirely, since `crc32c` -- `oci`'s transitive dep that needed compiling -- left with it).
+OCIR-only; there is no Docker Hub / ghcr.io version-check logic. `oci` is a dependency of `ocir_cleanup` and `secret_age` only, not of scan.
 
 Properties:
 - `oci_registry` — derived from the OCI config region.
@@ -162,11 +159,11 @@ Safety guards:
 - Deletion is opt-in via `OCIR_CLEANUP_ENABLED=true`.
 
 ### `packages/ocir_cleanup/src/ocir_cleanup/main.py`
-`run_cleanup(config, logger_provider, notifier)` — no `discovered_images` parameter (dropped along with the split: no deployed CronJob ever ran scan+cleanup combined in one process, so there was nothing live to preserve by keeping the hand-off). Always lists pods itself via `KubernetesClient`. If `CLEANUP_REPO` is set, the run is scoped to that single OCIR repo (image set filtered + `extra_repositories=[cleanup_repo]` so cleanup happens even with nothing deployed); otherwise it sweeps every image and uses `config.ocir_extra_repositories`.
+`run_cleanup(config, logger_provider, notifier)` — always lists pods itself via `KubernetesClient`. If `CLEANUP_REPO` is set, the run is scoped to that single OCIR repo (image set filtered + `extra_repositories=[cleanup_repo]` so cleanup happens even with nothing deployed); otherwise it sweeps every image and uses `config.ocir_extra_repositories`.
 
-Producer pipelines fire a one-off Job with `CLEANUP_REPO=<repo>` so cleanup runs right after a push, without waiting for the daily cron. The deployed-tag protection still works: at push time the cluster is still running the old tag, so `get_old_ocir_images` finds it via k8s discovery and protects it.
+A one-off run with `CLEANUP_REPO=<repo>` still protects the deployed tag: the cluster is running the old tag, so `get_old_ocir_images` finds it via k8s discovery. The deployed CronJob leaves `CLEANUP_REPO` unset (it is the only scheduled pruner).
 
-`main()` returns an `int` (0/1) rather than calling `sys.exit()` directly -- `__main__.py` does `sys.exit(main())`. This is a deliberate small deviation from scan's `main()`, which still returns `None` (see above) because `Config.from_env()`, unlike `CleanupConfig.from_env()`, never had anything to validate either -- there was nothing to gain by adding an int return there.
+`main()` returns an `int` (0/1); `__main__.py` does `sys.exit(main())`. Scan's `main()` returns `None`.
 
 ### `packages/scan/src/scan/discord_notifier.py` / `packages/ocir_cleanup/src/ocir_cleanup/discord_notifier.py`
 Each package keeps only the report-shape method(s) it needs, both wrapping `oke_scanner_core.discord_webhook.DiscordWebhookClient`:
@@ -177,40 +174,37 @@ Each package keeps only the report-shape method(s) it needs, both wrapping `oke_
 
 All values passed to `add_row` should be strings. Each paginated page is sent as a separate webhook POST with a 1-second sleep between requests to respect rate limits (in `DiscordWebhookClient`, not per-package).
 
+### `packages/secret_age/`
+`main()` runs three readers (`readers/oci_iam.py`, `readers/k8s.py`, `readers/layer1_ledger.py`), each in its own `try/except` so one failing source never blocks the report; `aggregator.aggregate()` buckets `Finding`s into rotate/warn/unknown/ok (oldest first); `discord_report.send_report()` posts tables plus a full CSV. Thresholds: `SECRET_AGE_WARN_DAYS=90`, `SECRET_AGE_ROTATE_DAYS=180`. See the README's "Secret-age tracker" section for the annotation contract (`secret-age-tracker.tnoff/last-rotated`, `unknown` sentinel, `expires-at`). Notes:
+
+- It must keep `secrets list` metadata-only and never read `.data`; its RBAC is a separate ServiceAccount from the scanner's on purpose.
+- OCI IAM findings deliberately carry no `rotation_command` (terraform-managed credentials; an out-of-band rotation causes state drift).
+- `Layer.SEALED_SECRET` and its Discord title still exist in `finding.py`/`discord_report.py`, but no reader emits it; Sealed Secrets are decommissioned.
+- `main()` returns an int; it does not use OpenTelemetry (stdout logging only).
+
 ## Docker Image
 
-Four packages, four `Dockerfile`s, all under `packages/*/Dockerfile` now
-(scan's used to live at repo root; moved into `packages/scan/Dockerfile` to
-match the other three -- see
-docs/projects/oke-security-scanner-package-split.md). Only `packages/scan/
-Dockerfile` has a Trivy stage; `packages/secret_age`'s also has no
-OpenTelemetry deps (`packages/ocir_cleanup`'s does -- `ocir-cleanup-cronjob.yaml`
-genuinely enables OTLP metrics+logs). This section covers
-`packages/scan/Dockerfile`.
+One `Dockerfile` per package at `packages/<name>/Dockerfile`, all built from
+repo-root context (so each can `COPY packages/core`). Only `packages/scan/Dockerfile`
+has a Trivy stage; `secret_age` has no OpenTelemetry deps, `ocir_cleanup` does.
+Images are `iad.ocir.io/tnoff/oke-scan`, `.../ocir_cleanup` and
+`.../secret_age_tracker`. This section covers `packages/scan/Dockerfile`:
 
-All four build from repo-root context (so each can also `COPY packages/
-core`), even though the Dockerfile itself lives under `packages/<name>/`.
+1. `trivy-builder` — `python:3.14-slim` + `curl` + `ca-certificates`, runs the official Trivy install script and drops the pinned `trivy` binary in `/usr/local/bin/`. Version pinned via `ARG TRIVY_VERSION`.
+2. `py-builder` — `python:3.14-slim`, `pip install --prefix=/install ./packages/core ./packages/scan`.
+3. Final stage — `python:3.14-slim`, applies security upgrades, copies `trivy` and `/install`, runs as non-root `scanner` (UID 1000).
 
-Two-stage Dockerfile (the `build-essential` compile stage is gone -- it only
-existed for `oci`'s `crc32c` transitive dep, and `oci` left with
-`packages/ocir_cleanup`):
-1. `trivy-builder` — `python:3.14-slim` + `curl` + `ca-certificates`, runs the official Trivy install script and drops the pinned `trivy` binary in `/usr/local/bin/`.
-2. `py-builder` — plain `python:3.14-slim`, runs `pip install --no-cache-dir --prefix=/install ./packages/core ./packages/scan` (both packages properly pip-installed -- no loose-copy fallback the way root `src/` once needed, since `scan` didn't have a real top-level import name until this move).
-3. Final stage — `python:3.14-slim`, applies security upgrades, copies the `trivy` binary from `trivy-builder` and the installed packages from `py-builder`'s `/install` (`COPY --from=py-builder /install /usr/local`, no `pip install` and no loose source `COPY` in the final stage at all now -- `scan` is a real installed package), runs as non-root `scanner` (UID 1000).
-
-The final image carries **no** `curl` / `wget` / `tar` / `git` / build toolchain. The Trivy DB is **not** pre-downloaded — `main()` fetches it on startup. Trivy version is pinned via `ARG TRIVY_VERSION` in the builder stage.
-
-Measured (not read off the Dockerfile), at the time of the original scan/cleanup split: **810.8 MB → 393.4 MB** for this image; `packages/secret_age`'s own is 630.5 MB; `packages/ocir_cleanup`'s own is 658.0 MB. Re-measured after moving `src/` into `packages/scan/` (same day, same floating deps, A/B against the pre-move Dockerfile): 412 MB before → 413 MB after -- confirms the move itself is size-neutral; the drift from the 393.4 MB figure above is unpinned transitive deps resolving differently over time, not this restructuring.
+The final image carries no `curl` / `wget` / `tar` / `git` / build toolchain. The Trivy DB is **not** pre-downloaded; `main()` fetches it on startup.
 
 ## CI/CD
 
 The project uses **GitHub Actions**. `.github/workflows/` holds three callers:
 
-- `ci.yml` — on pull requests: trufflehog secret scan, the tox matrix (pytest + pylint + bandit across Python 3.11–3.14) with a diff-cover gate, a conditional image build + image scan for EACH image (`changes` job outputs `image`/`secret_age_image`/`ocir_cleanup_image`, gated on separate path filters -- not a matrix, so each has its own `needs`/`if`; `packages/core/*` flips all three, since all three depend on it), `bump-version`, and `check-workflow-contracts` (catches a `uses:` whose inputs/secrets no longer match the pinned callee). The scan build/scan job passes `dockerfile: packages/scan/Dockerfile` explicitly now (the reusable `docker-build-check.yml`'s default is root `Dockerfile`, which no longer exists).
-- `release.yml` — on `main`: fold the changelog, tag from `VERSION` (shared across all three images), push each changed image to OCIR under its own OCIR repo name, and trigger a `docker-apps` pin bump per image (`oke-scan`, `secret-age-tracker` and `ocir-cleanup` are separate `bump_source`s, each its own explicit `push-image-*`/`trigger-bump-*` job pair -- not a matrix; matrix job outputs aren't addressable per-leg, and `trigger-bump` needs the exact tag its own paired push produced). Same `dockerfile: packages/scan/Dockerfile` override on the scan `push-image` job as `ci.yml`. Scan's `repo_name` is now hardcoded `oke-scan` directly in the job (matching secret-age-tracker/ocir-cleanup's own jobs) rather than sourced from a terraform-set `vars.OCI_REPO_NAME` -- that variable only ever pointed at one of the three images and was dropped once there was no single "the" image left to name it after.
+- `ci.yml` — on pull requests: trufflehog secret scan, the tox matrix (pytest + pylint + bandit across Python 3.11–3.14) with a diff-cover gate, a conditional image build + image scan for EACH image (`changes` job outputs `image`/`secret_age_image`/`ocir_cleanup_image`, gated on separate path filters -- not a matrix, so each has its own `needs`/`if`; `packages/core/*` flips all three, since all three depend on it), `bump-version`, and `check-workflow-contracts` (catches a `uses:` whose inputs/secrets no longer match the pinned callee). The scan build/scan job passes `dockerfile: packages/scan/Dockerfile` explicitly (the reusable `docker-build-check.yml` defaults to a root `Dockerfile`, which does not exist here).
+- `release.yml` — on `main`: fold the changelog, tag from `VERSION` (shared across all three images), push each changed image to OCIR under its own OCIR repo name, and trigger a `docker-apps` pin bump per image (`oke-scan`, `secret-age-tracker` and `ocir-cleanup` are separate `bump_source`s, each its own explicit `push-image-*`/`trigger-bump-*` job pair -- not a matrix; matrix job outputs aren't addressable per-leg, and `trigger-bump` needs the exact tag its own paired push produced). Same `dockerfile: packages/scan/Dockerfile` override on the scan `push-image` job as `ci.yml`. Each job hardcodes its OCIR `repo_name` (`oke-scan`, `secret_age_tracker`, `ocir_cleanup`).
 - `scheduled.yml` — weekly: Renovate and branch cleanup.
 
-Each job calls a reusable workflow from `tnoff/github-workflows`, SHA-pinned in `uses:` and kept current by Renovate's github-actions manager. There is no `.gitlab-ci.yml` in this repo -- `ci.yml`'s own header notes it was ported from one, but the file itself isn't present, frozen or otherwise.
+Each job calls a reusable workflow from `tnoff/github-workflows`, SHA-pinned in `uses:` and kept current by Renovate's github-actions manager.
 
 ## Code Quality
 
@@ -218,7 +212,7 @@ Configuration lives in root `pyproject.toml` -- which has no importable code
 of its own (see File Structure above), but is the single source both tox
 and pylint actually use:
 - `[project.optional-dependencies].dev` — `bandit`, `pylint`, `pytest`, `pytest-cov`, `pytest-mock`, `pytest-asyncio`, `tox`, `coverage`. tox's `extras = dev` installs these for every testenv; no package's own pyproject.toml carries a competing copy.
-- `[tool.pylint.*]` — pylint rules (max line length 120, etc.). tox's combined `pylint packages/core/src packages/scan/src ...` invocation runs from repo-root cwd, and pylint discovers config from CWD -- so this is the block actually in effect for all four packages. None of the four packages' own `pyproject.toml` carries a `[tool.pylint.*]` block (two used to, found to be dead weight and removed when `packages/scan` joined them -- don't re-add one without checking it would actually be read).
+- `[tool.pylint.*]` — pylint rules (max line length 120, etc.). tox's combined `pylint packages/core/src packages/scan/src ...` invocation runs from repo-root cwd, and pylint discovers config from CWD -- so this is the block in effect for all four packages. No package's own `pyproject.toml` carries a `[tool.pylint.*]` block; don't add one without checking it would actually be read.
 
 `tox.ini` defines envs `py311`..`py314` and exposes `pytest`, `pylint`, `bandit` as individual envs.
 

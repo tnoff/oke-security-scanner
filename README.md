@@ -1,12 +1,11 @@
 # OKE Utilities
 
-Three independent CronJob packages/images for the OKE cluster: image
-vulnerability scanning (with OpenTelemetry observability), OCIR tag/manifest
-cleanup, and secret-age tracking. Originally a single "security scanner"
-repo; renamed once the
-[package split](https://github.com/tnoff/docs) (`docs/projects/oke-security-scanner-package-split.md`)
-made clear it was really three independent utilities sharing one repo and
-one `packages/core`, not phases of one scanner.
+Three independent CronJob packages/images for the OKE cluster, sharing one
+library: image vulnerability scanning (`oke-scan`, with OpenTelemetry
+observability), OCIR tag/manifest cleanup (`ocir-cleanup`), and secret-age
+tracking (`secret-age-tracker`). The deployed manifests, schedules and
+operations live in `tnoff/docker-apps` (`apps/security-scanner/`, with a
+TechDocs site at `techdocs/oke-utilities`); this repo holds the code and images.
 
 ## Features
 
@@ -16,11 +15,12 @@ one `packages/core`, not phases of one scanner.
 | OCIR Image Cleanup | Yes | Its own package/image (`packages/ocir_cleanup/`, `python -m ocir_cleanup`). Deletes old OCIR tags beyond a configurable `keep_count`, while protecting the deployed tag, `latest`, and any multi-arch sub-manifest digests referenced by kept tags. |
 | Orphan Manifest Cleanup | Yes | Same package/image as OCIR Image Cleanup. Detects and removes `unknown@sha256:...` platform manifests in OCIR whose digest is no longer referenced by any tagged manifest list. |
 | Cache Management | No | Security Scanner only. Automatic cleanup of Trivy image cache after each scan to minimize disk usage. |
-| Secret-age Tracker | Yes | Its own package (`packages/secret_age/`) and its own image, with its own CronJob. Reports secrets ≥90 days old across OCI IAM credentials, Kubernetes Secrets — including `docker-apps` SealedSecrets, via the `secret-age-tracker.tnoff/last-rotated` annotation on their target Secret — and operator-tracked admin tfvars (via a layer-1 ledger ConfigMap). See the [docs corpus](https://github.com/tnoff/docs)'s `docs/projects/secret-age-tracker.md` (a separate repo, not this one's own `docs/`). Invoked as `python -m secret_age`. |
+| Secret-age Tracker | Yes | Its own package/image (`packages/secret_age/`, `python -m secret_age`). Reports credential ages across OCI IAM credentials, Kubernetes Secrets (by the `secret-age-tracker.tnoff/last-rotated` annotation, falling back to `creationTimestamp`), and operator-tracked admin tfvars (a ledger ConfigMap). See [Secret-age tracker](#secret-age-tracker). |
 
-All three share `packages/core/` (image discovery, k8s auth, the Discord
-webhook client, and — for Security Scanner and OCIR Image Cleanup, which
-both run with OpenTelemetry — the OTel setup/teardown helpers).
+All three share `packages/core/` (`oke-scanner-core`: image discovery, k8s
+auth, the Discord webhook client, and, for the scanner and cleanup, which run
+with OpenTelemetry, the OTel setup/teardown helpers behind a `[telemetry]`
+extra).
 
 ## Install and Usage
 
@@ -37,26 +37,25 @@ Cleanup and secret-age-tracker are separate installs — see
 own `pyproject.toml`; e.g. `pip install packages/core packages/ocir_cleanup &&
 python -m ocir_cleanup`).
 
-See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for full local setup instructions (including the `[dev]` extras for running tests / linting).
+See [DEVELOPMENT.md](https://github.com/tnoff/oke-utilities/blob/main/docs/DEVELOPMENT.md) for full local setup instructions (including the `[dev]` extras for running tests / linting).
 
 Or use the docker build (one per image):
 
 ```
 $ docker build -f packages/scan/Dockerfile .            # security scanner
 $ docker build -f packages/ocir_cleanup/Dockerfile .    # OCIR cleanup
-$ docker build -f packages/secret_age/Dockerfile . # secret-age tracker
+$ docker build -f packages/secret_age/Dockerfile .      # secret-age tracker
 ```
 
 ### Running in Kubernetes
 
-The [`k8s/`](./k8s) folder ships example manifests for the security scanner:
-- **`rbac.yaml`** — `ServiceAccount` + read-only `ClusterRole` (pods, namespaces).
-- **`cronjob.yaml`** — daily CronJob that mounts three Secrets: `security-scanner-config` (env-var overrides), `security-scanner-oci-config` (`~/.oci/config` + API key), and `security-scanner-docker-config` (`~/.docker/config.json`).
-- **`secret-example.yaml`** — template for all three Secrets; copy, fill in values, and apply.
-
-The real deployed manifests for all three CronJobs (including cleanup's and
-secret-age-tracker's own) live in `docker-apps`' `apps/security-scanner/`,
-not in this repo.
+The real manifests for all three CronJobs, their RBAC and Secrets are in
+`tnoff/docker-apps` (`apps/security-scanner/`; see `techdocs/oke-utilities`
+there for schedules and operations). The [`k8s/`](./k8s) folder is a generic,
+standalone starting point for the scanner only: `rbac.yaml` (ServiceAccount +
+read-only ClusterRole), `cronjob.yaml`, and `secret-example.yaml` (copy, fill in,
+apply). Secret names and schedules there are illustrative and differ from the
+deployed ones.
 
 ## Authentication
 
@@ -145,36 +144,50 @@ Kubernetes Secrets.
 | `CLEANUP_GROUP_BY_REGEX` | No | `''` | When set, the candidate pool is grouped by the first capture group and `keep_count` is applied per group. Prevents heavy churn in one group from pushing other groups' tags out of the keep window (e.g. `^(\d+\.\d+)` keeps the last N `:3.X-<sha>` per minor independently). |
 | `CLEANUP_REPO` | No | `''` | Scope the run to one OCIR repo (namespace-qualified, e.g. `tnoff/discord_bot`) |
 
-`packages/secret_age/`'s env vars are documented separately — see that
-package's `README`/docs project, not here.
+**Secret-age tracker** (`packages/secret_age/src/secret_age/config.py`, `python -m secret_age`):
 
-## On-push cleanup
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DISCORD_WEBHOOK_URL` | No | (disabled) | Webhook for the report |
+| `SECRET_AGE_WARN_DAYS` | No | `90` | Age at which a credential is reported as WARN |
+| `SECRET_AGE_ROTATE_DAYS` | No | `180` | Age at which a credential is reported as ROTATE |
+| `OCI_TENANCY_OCID` | For OCI reader | (empty) | Tenancy to enumerate IAM users in; the OCI reader is skipped when unset |
+| `LAYER1_CONFIGMAP_NAME` | No | `layer-1-rotation-ledger` | Ledger ConfigMap name |
+| `LAYER1_CONFIGMAP_NAMESPACE` | No | `security-scanner` | Ledger ConfigMap namespace |
+| `ENABLE_OCI_READER` / `ENABLE_K8S_READER` / `ENABLE_LAYER1_READER` | No | `true` | Turn individual readers off |
 
-Producer pipelines that want to prune old tags as soon as they push a new
-image can fire a one-off Job derived from the **cleanup CronJob template**
-(not the scanner's — cleanup is a separate image now, so there's no
-`ENABLE_SCAN=false` toggle to set):
+## Secret-age tracker
 
-```bash
-kubectl -n default create job "cleanup-${REPO}-${TAG}" \
-  --from=cronjob/ocir-cleanup-cronjob --dry-run=client -o json \
-| jq '.spec.template.spec.containers[0].env += [
-    {"name":"CLEANUP_REPO","value":"'"$OCIR_REPO"'"},
-    {"name":"OCIR_CLEANUP_ENABLED","value":"true"}
-  ]' \
-| kubectl apply -f -
-```
+Three readers, each failing independently (a broken reader logs and the others
+still report):
 
-Setting `CLEANUP_REPO` scopes the run to a single OCIR repo; unset,
-cleanup sweeps every image deployed in the cluster. The
-currently-deployed tag is always protected — at push time the cluster
-is still running the old tag, so the deployed-image protection in
-`get_old_ocir_images` catches it.
+- **OCI IAM**: per user, the `time_created` of auth tokens, customer secret
+  keys and API keys. Needs `inspect users` on the tenancy via `~/.oci/config`.
+- **Kubernetes Secrets**: every non-system Secret (service-account-token, helm
+  release and bootstrap-token types are skipped). Age comes from the
+  `secret-age-tracker.tnoff/last-rotated` annotation (`YYYY-MM-DD`), falling
+  back to `creationTimestamp`, which is unreliable for Secrets updated in
+  place. The annotation value `unknown` is the terraform-seeded sentinel: it
+  is reported as its own UNKNOWN bucket, never as age 0. A separate
+  `secret-age-tracker.tnoff/expires-at` annotation yields a days-to-expiry
+  finding for credentials with a hard provider-enforced expiry. Needs cluster-wide
+  `list` on `secrets` (metadata only; `.data` is never read).
+- **Layer-1 ledger**: a ConfigMap of `{tfvar_name: date}` for admin tfvars that
+  never reach the cluster, written from terraform-admin.
 
-[`k8s/rbac-cleanup-trigger.yaml`](./k8s/rbac-cleanup-trigger.yaml)
-provides a Role and RoleBinding granting a CI ServiceAccount the
-minimum permissions to spawn this Job (default subjects: `gitlab-runner`
-SA in the `gitlab-runner` namespace — adjust to match your setup).
+Findings are bucketed ROTATE / WARN / UNKNOWN / OK, oldest first, and posted to
+Discord as monospace tables plus a CSV. OCI IAM findings carry no rotation
+command on purpose: those credentials are mostly terraform-managed, and rotating
+them out of band would cause state drift (see the secret-rotation runbook in
+`tnoff/terraform-admin`).
+
+## Scoping a cleanup run
+
+Setting `CLEANUP_REPO` scopes a run to a single OCIR repo; unset, cleanup sweeps
+every image deployed in the cluster plus `OCIR_EXTRA_REPOSITORIES`. The deployed
+CronJob leaves it unset and is the only scheduled pruner. For an ad hoc
+single-repo run, create a Job from the cleanup CronJob with `CLEANUP_REPO` set.
+The currently deployed tag is always protected via k8s discovery.
 
 ## Required Permissions
 
